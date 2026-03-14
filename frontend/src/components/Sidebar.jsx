@@ -8,7 +8,7 @@ export default function Sidebar({ activeTab, setActiveTab }) {
   ];
 
   return (
-    <div className="w-64 h-screen fixed left-0 top-0 bg-gradient-to-b from-indigo-600 to-purple-700 text-white flex flex-col py-8 px-4 shadow-xl z-20">
+    <div className="w-64 h-screen fixed left-0 top-0 bg-gradient-to-b from-[#5c4033] to-[#3e2723] text-white flex flex-col py-8 px-4 shadow-xl z-20">
       <div className="flex items-center gap-3 px-4 mb-12">
         <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center backdrop-blur-md shadow-inner">
           <div className="w-6 h-6 rounded-full bg-white animate-pulse" style={{ animationDuration: '3s' }} />
@@ -46,15 +46,7 @@ export default function Sidebar({ activeTab, setActiveTab }) {
         })}
       </nav>
 
-      <div className="mt-auto px-4 py-6 bg-white/5 rounded-2xl backdrop-blur-sm border border-white/10">
-        <div className="flex items-center gap-3 opacity-80">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-400 to-emerald-400" />
-          <div className="text-sm">
-            <p className="font-semibold">Admin User</p>
-            <p className="text-xs opacity-75">Platform Management</p>
-          </div>
-        </div>
-      </div>
+
     </div>
   );
 }

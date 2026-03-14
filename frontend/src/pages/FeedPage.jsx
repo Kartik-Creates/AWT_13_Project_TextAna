@@ -3,7 +3,7 @@ import CreatePost from "../components/CreatePost";
 import PostCard from "../components/PostCard";
 import Loader from "../components/Loader";
 
-export default function Feed({ posts, setPosts }) {
+export default function Feed({ posts, setPosts, isLoading }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async ({ text, image }) => {
@@ -48,14 +48,18 @@ export default function Feed({ posts, setPosts }) {
       <div className="h-px bg-gray-200 my-4 w-full" />
 
       <div className="space-y-1">
-        {posts.length === 0 ? (
+        {isLoading ? (
+          <div className="flex justify-center p-8">
+            <div className="w-8 h-8 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin" />
+          </div>
+        ) : posts.length === 0 ? (
           <div className="text-center py-12 text-gray-400">
             <p className="text-lg font-medium">No posts yet</p>
             <p className="text-sm">Be the first to create a post!</p>
           </div>
         ) : (
           posts.map((post, idx) => (
-            <PostCard key={post.id || idx} post={post} />
+            <PostCard key={post.id || post._id || idx} post={post} />
           ))
         )}
       </div>

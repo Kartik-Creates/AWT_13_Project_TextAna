@@ -8,7 +8,11 @@ export default function PostCard({ post }) {
     <motion.div 
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="glass-panel rounded-2xl p-4 sm:p-5 mb-4 border border-gray-100 hover:bg-white/60 transition-colors cursor-pointer group"
+      className={`rounded-2xl p-4 sm:p-5 mb-4 transition-colors cursor-pointer group ${
+        isAllowed 
+          ? "glass-panel border border-gray-100 hover:bg-white/60" 
+          : "bg-rose-50/70 border border-rose-200 hover:bg-rose-100/60"
+      }`}
     >
       <div className="flex gap-4 relative">
         {/* Avatar */}

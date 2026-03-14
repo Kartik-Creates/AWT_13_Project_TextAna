@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --color-loops-bg: #f8fafc;
+  --color-loops-bg: #fdfbf7;
   --color-loops-card: rgba(255, 255, 255, 0.7);
   --color-loops-border: rgba(255, 255, 255, 0.5);
   --color-loops-primary: #5b2bee;
@@ -32,7 +32,7 @@ body {
   display: flex;
   min-height: 100vh;
   box-sizing: border-box;
-  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  background: linear-gradient(135deg, #fbf7f0 0%, #f0ead6 100%);
   background-attachment: fixed;
 }
 

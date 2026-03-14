@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import FeedPage from "./pages/FeedPage";
@@ -9,6 +9,29 @@ function App() {
   const [activeTab, setActiveTab] = useState("feed");
   const [posts, setPosts] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchPosts = async () => {
+      try {
+        const response = await fetch("/api/posts");
+        if (response.ok) {
+          const data = await response.json();
+          // Assuming the backend returns an array of objects
+          if (Array.isArray(data)) {
+            // Reverse to show newest at top assuming Mongo returns chronological
+            setPosts(data.reverse());
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching initial posts:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    fetchPosts();
+  }, []);
 
   const handleCreatePost = async ({ text, image }) => {
     setIsSubmitting(true);
@@ -63,7 +86,7 @@ function App() {
           </div>
         )}
 
-        {activeTab === "feed" && <FeedPage posts={posts} setPosts={setPosts} />}
+        {activeTab === "feed" && <FeedPage posts={posts} setPosts={setPosts} isLoading={isLoading} />}
         
         {/* Global Loading Overlay triggered from Create Tab */}
         {isSubmitting && activeTab === 'create' && <Loader />}
