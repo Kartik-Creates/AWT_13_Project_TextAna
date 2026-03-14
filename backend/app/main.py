@@ -1,21 +1,99 @@
+"""
+Main FastAPI application for Loops Moderation System
+Sachinn's responsibility: API setup, middleware, server configuration
+"""
+
 from fastapi import FastAPI
-from app.core.config import settings
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import os
+from dotenv import load_dotenv
+import logging
+
 from app.api import posts
-from app.services.moderation_service import load_model
+from app.db.mongodb import mongodb
 
+# Load environment variables
+load_dotenv()
 
-
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-app.include_router(posts.router)
+logger = logging.getLogger(__name__)
+
+# Create FastAPI app
+app = FastAPI(
+    title="Loops Content Moderation System",
+    description="AI-powered content moderation API",
+    version="1.0.0"
+)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # React frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Create uploads directory
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Mount static files
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# Include routers
+app.include_router(posts.router, prefix="/api/posts", tags=["posts"])
 
 @app.on_event("startup")
-def startup_event():
-    load_model()
+async def startup_event():
+    """Initialize services on startup"""
+    logger.info("Starting up Loops Moderation System")
+    
+    # Initialize database connection
+    try:
+        mongodb.connect()
+        logger.info("Database connection verified")
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        raise
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("Shutting down Loops Moderation System")
+    
+    # Close database connection
+    mongodb.close()
 
 @app.get("/")
-def root():
-    return {"message": "Loops Moderation API is running"}
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "Welcome to Loops Content Moderation System",
+        "version": "1.0.0",
+        "status": "operational",
+        "endpoints": {
+            "docs": "/docs",
+            "redoc": "/redoc",
+            "posts": "/api/posts"
+        }
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "database": "connected",
+        "services": {
+            "api": "operational",
+            "moderation": "ready"
+        }
+    }
