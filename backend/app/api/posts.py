@@ -1,8 +1,17 @@
 from fastapi import APIRouter, UploadFile, File
 from app.services.moderation_service import analyze_text, decision_engine
 from app.services.image_service import analyze_image
+from app.db.mongodb import get_all_posts
 
 router = APIRouter()
+
+@router.get("/posts")
+async def get_posts():
+    try:
+        posts = get_all_posts()
+        return posts
+    except Exception as e:
+        return {"error": str(e)}
 
 @router.post("/posts")
 async def create_post(text: str, image: UploadFile = File(None)):
