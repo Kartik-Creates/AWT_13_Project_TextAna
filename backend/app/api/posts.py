@@ -1,8 +1,3 @@
-"""
-Post API endpoints
-Sachinn's responsibility: Handle all post-related HTTP requests
-"""
-
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
 from typing import Optional, List
@@ -37,34 +32,21 @@ async def save_upload_file(upload_file: UploadFile) -> str:
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(upload_file.file, buffer)
     
-    logger.info(f"File saved: {file_path}")
     return f"/uploads/{file_name}"
 
-@router.post("/", response_model=PostResponse, status_code=201)
+@router.post("/", response_model=PostResponse)
 async def create_post(
     background_tasks: BackgroundTasks,
-    text: str = Form(..., description="Post content"),
-    image: Optional[UploadFile] = File(None, description="Optional image")
+    text: str = Form(...),
+    image: Optional[UploadFile] = File(None)
 ):
-    """
-    Create a new post with automatic moderation
-    
-    - **text**: Post content (required)
-    - **image**: Optional image file
-    """
+    """Create a new post with moderation"""
     try:
         logger.info(f"Creating new post with text: {text[:50]}...")
         
         # Save image if provided
         image_path = None
         if image and image.filename:
-            # Validate file type
-            allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
-            if image.content_type not in allowed_types:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"File type not allowed. Allowed: {allowed_types}"
-                )
             image_path = await save_upload_file(image)
             logger.info(f"Image saved: {image_path}")
         
@@ -99,37 +81,15 @@ async def create_post(
             "created_at": datetime.utcnow().isoformat()
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error creating post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/", response_model=List[PostResponse])
-async def get_posts(
-    skip: int = 0, 
-    limit: int = 50,
-    filter: Optional[str] = None
-):
-    """
-    Get all posts with pagination and optional filtering
-    
-    - **skip**: Number of posts to skip
-    - **limit**: Maximum number of posts to return
-    - **filter**: Filter by status (all, allowed, rejected, pending)
-    """
+async def get_posts(skip: int = 0, limit: int = 50):
+    """Get all posts with pagination"""
     try:
         posts = post_repository.get_all(skip=skip, limit=limit)
-        
-        # Apply filter if specified
-        if filter and filter != "all":
-            if filter == "allowed":
-                posts = [p for p in posts if p.get("allowed") == True]
-            elif filter == "rejected":
-                posts = [p for p in posts if p.get("allowed") == False]
-            elif filter == "pending":
-                posts = [p for p in posts if p.get("allowed") is None]
-        
         return posts
     except Exception as e:
         logger.error(f"Error fetching posts: {e}")
@@ -143,7 +103,7 @@ async def get_post(post_id: str):
         raise HTTPException(status_code=404, detail="Post not found")
     return post
 
-@router.get("/stats/overview", response_model=StatsResponse)
+@router.get("/stats/overview")
 async def get_stats():
     """Get moderation statistics"""
     try:
@@ -159,7 +119,7 @@ async def delete_post(post_id: str):
     success = post_repository.delete(post_id)
     if not success:
         raise HTTPException(status_code=404, detail="Post not found")
-    return {"message": "Post deleted successfully", "id": post_id}
+    return {"message": "Post deleted successfully"}
 
 @router.post("/{post_id}/reprocess")
 async def reprocess_post(post_id: str, background_tasks: BackgroundTasks):
@@ -176,4 +136,4 @@ async def reprocess_post(post_id: str, background_tasks: BackgroundTasks):
         image_path=post.get("image_path")
     )
     
-    return {"message": "Post queued for reprocessing", "id": post_id}
+    return {"message": "Post queued for reprocessing"}

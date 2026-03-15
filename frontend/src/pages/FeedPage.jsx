@@ -14,7 +14,7 @@ export default function Feed({ posts, setPosts, isLoading }) {
       if (text) formData.append("text", text);
       if (image) formData.append("image", image);
 
-      const response = await fetch("/api/posts", {
+      const response = await fetch("/api/posts/", {
         method: "POST",
         body: formData,
       });

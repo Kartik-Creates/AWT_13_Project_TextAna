@@ -1,7 +1,6 @@
 import re
 from typing import List, Dict, Any
 import logging
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +27,9 @@ class TextProcessor:
     
     def extract_urls(self, text: str) -> List[Dict[str, Any]]:
         """Extract and analyze URLs from text"""
+        if not text:
+            return []
+        
         urls = []
         matches = self.url_pattern.finditer(text)
         
@@ -64,22 +66,41 @@ class TextProcessor:
     
     def extract_mentions(self, text: str) -> List[str]:
         """Extract @mentions from text"""
+        if not text:
+            return []
         return self.mention_pattern.findall(text)
     
     def extract_hashtags(self, text: str) -> List[str]:
         """Extract #hashtags from text"""
+        if not text:
+            return []
         return self.hashtag_pattern.findall(text)
     
     def extract_emails(self, text: str) -> List[str]:
         """Extract email addresses"""
+        if not text:
+            return []
         return self.email_pattern.findall(text)
     
     def extract_phones(self, text: str) -> List[str]:
         """Extract phone numbers"""
+        if not text:
+            return []
         return self.phone_pattern.findall(text)
     
     def get_text_stats(self, text: str) -> Dict[str, Any]:
         """Get basic text statistics"""
+        if not text:
+            return {
+                "char_count": 0,
+                "word_count": 0,
+                "sentence_count": 0,
+                "avg_word_length": 0,
+                "has_uppercase": False,
+                "has_numbers": False,
+                "has_special_chars": False
+            }
+        
         words = text.split()
         
         return {
@@ -94,6 +115,9 @@ class TextProcessor:
     
     def clean_text(self, text: str) -> str:
         """Clean and normalize text"""
+        if not text:
+            return ""
+        
         # Remove extra whitespace
         text = ' '.join(text.split())
         

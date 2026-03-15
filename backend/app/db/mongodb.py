@@ -81,8 +81,11 @@ class PostRepository:
         posts = []
         for doc in cursor:
             doc["_id"] = str(doc["_id"])
+            doc["id"] = doc["_id"]
             if "created_at" in doc:
                 doc["created_at"] = doc["created_at"].isoformat()
+            if "updated_at" in doc and hasattr(doc["updated_at"], 'isoformat'):
+                doc["updated_at"] = doc["updated_at"].isoformat()
             posts.append(doc)
         
         return posts
@@ -95,8 +98,11 @@ class PostRepository:
             doc = self.collection.find_one({"_id": ObjectId(post_id)})
             if doc:
                 doc["_id"] = str(doc["_id"])
+                doc["id"] = doc["_id"]
                 if "created_at" in doc:
                     doc["created_at"] = doc["created_at"].isoformat()
+                if "updated_at" in doc and hasattr(doc["updated_at"], 'isoformat'):
+                    doc["updated_at"] = doc["updated_at"].isoformat()
             return doc
         except Exception as e:
             logger.error(f"Error fetching post {post_id}: {e}")
@@ -107,19 +113,23 @@ class PostRepository:
         """Update post with moderation results"""
         from bson.objectid import ObjectId
         
-        result = self.collection.update_one(
-            {"_id": ObjectId(post_id)},
-            {
-                "$set": {
-                    "allowed": allowed,
-                    "reasons": reasons,
-                    "flagged_phrases": flagged_phrases,
-                    "moderated_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow()
+        try:
+            result = self.collection.update_one(
+                {"_id": ObjectId(post_id)},
+                {
+                    "$set": {
+                        "allowed": allowed,
+                        "reasons": reasons,
+                        "flagged_phrases": flagged_phrases,
+                        "moderated_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow()
+                    }
                 }
-            }
-        )
-        return result.modified_count > 0
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Error updating moderation result for post {post_id}: {e}")
+            return False
     
     def delete(self, post_id: str) -> bool:
         """Delete a post"""

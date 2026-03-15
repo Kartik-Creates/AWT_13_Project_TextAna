@@ -1,5 +1,6 @@
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { BarChart3, ShieldCheck, ShieldAlert, Layers } from "lucide-react";
+import { BarChart3, ShieldCheck, ShieldAlert, Layers, Clock } from "lucide-react";
 import { 
   AreaChart, 
   Area, 
@@ -10,7 +11,7 @@ import {
   ResponsiveContainer 
 } from "recharts";
 
-// Mock data representing the last 7 days of moderation activity
+// Mock chart data — will be replaced when we have time-series data in DB
 const moderationData = [
   { date: "Mon", allowed: 1200, blocked: 45 },
   { date: "Tue", allowed: 1350, blocked: 52 },
@@ -22,39 +23,92 @@ const moderationData = [
 ];
 
 export default function AnalyticsPage() {
-  const stats = [
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const response = await fetch("/api/posts/stats/overview");
+        if (response.ok) {
+          const data = await response.json();
+          setStats(data);
+        } else {
+          setError("Failed to load stats");
+        }
+      } catch (err) {
+        console.error("Error fetching stats:", err);
+        setError("Backend not reachable");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchStats();
+    // Auto-refresh every 10 seconds
+    const interval = setInterval(fetchStats, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const statCards = [
     {
       label: "Total Posts",
-      value: "12,450",
+      value: loading ? "—" : stats ? stats.total.toLocaleString() : "0",
       icon: Layers,
       color: "text-blue-500",
       bg: "bg-blue-50",
-      trend: "+12.5%",
     },
     {
       label: "Allowed Posts",
-      value: "11,820",
+      value: loading ? "—" : stats ? stats.allowed.toLocaleString() : "0",
       icon: ShieldCheck,
       color: "text-emerald-500",
       bg: "bg-emerald-50",
-      trend: "+14.2%",
     },
     {
       label: "Blocked Posts",
-      value: "630",
+      value: loading ? "—" : stats ? stats.rejected.toLocaleString() : "0",
       icon: ShieldAlert,
       color: "text-rose-500",
       bg: "bg-rose-50",
-      trend: "-2.4%",
+    },
+    {
+      label: "Pending",
+      value: loading ? "—" : stats ? stats.pending.toLocaleString() : "0",
+      icon: Clock,
+      color: "text-amber-500",
+      bg: "bg-amber-50",
     },
   ];
+
+  // Calculate percentages for trend display
+  const getTrend = (card) => {
+    if (!stats || stats.total === 0) return null;
+    if (card.label === "Total Posts") return null;
+    if (card.label === "Allowed Posts") {
+      const pct = ((stats.allowed / stats.total) * 100).toFixed(1);
+      return `${pct}%`;
+    }
+    if (card.label === "Blocked Posts") {
+      const pct = ((stats.rejected / stats.total) * 100).toFixed(1);
+      return `${pct}%`;
+    }
+    if (card.label === "Pending") {
+      const pct = ((stats.pending / stats.total) * 100).toFixed(1);
+      return `${pct}%`;
+    }
+    return null;
+  };
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full pb-20">
       <div className="mb-10 flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-bold text-gray-900 tracking-tight">Platform Analytics</h2>
-          <p className="text-gray-500 mt-2 text-sm">Real-time overview of content moderation</p>
+          <p className="text-gray-500 mt-2 text-sm">
+            {loading ? "Loading stats..." : error ? error : "Real-time overview of content moderation"}
+          </p>
         </div>
         <button className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg shadow-sm border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
           <BarChart3 className="w-4 h-4" />
@@ -63,9 +117,10 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {stats.map((stat, idx) => {
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 mb-8">
+        {statCards.map((stat, idx) => {
           const Icon = stat.icon;
+          const trend = getTrend(stat);
           return (
             <motion.div
               key={stat.label}
@@ -81,9 +136,11 @@ export default function AnalyticsPage() {
                 <div className={`p-3 rounded-xl ${stat.bg}`}>
                   <Icon className={`w-6 h-6 ${stat.color}`} />
                 </div>
-                <div className={`text-xs font-semibold px-2 py-1 rounded-full ${stat.trend.startsWith('+') ? 'text-emerald-700 bg-emerald-100' : 'text-rose-700 bg-rose-100'}`}>
-                  {stat.trend}
-                </div>
+                {trend && (
+                  <div className="text-xs font-semibold px-2 py-1 rounded-full text-gray-600 bg-gray-100">
+                    {trend}
+                  </div>
+                )}
               </div>
               
               <div className="relative z-10">

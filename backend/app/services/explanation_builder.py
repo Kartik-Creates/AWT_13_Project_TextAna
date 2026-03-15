@@ -41,23 +41,23 @@ class ExplanationBuilder:
                 reasons.append(explanation)
         
         # Extract flagged phrases from results
-        if "rule_based" in results:
+        if "rule_based" in results and results["rule_based"]:
             rule_results = results["rule_based"]
             if rule_results.get("banned_keywords"):
                 flagged_phrases.extend(rule_results["banned_keywords"])
             if rule_results.get("suspicious_urls"):
                 flagged_phrases.extend(rule_results["suspicious_urls"])
         
-        if "text_analysis" in results:
+        if "text_analysis" in results and results["text_analysis"]:
             text_results = results["text_analysis"]
-            if text_results.get("flagged_phrases"):
+            if isinstance(text_results, dict) and text_results.get("flagged_phrases"):
                 for phrase in text_results["flagged_phrases"]:
                     if isinstance(phrase, dict):
                         flagged_phrases.append(phrase.get("phrase", ""))
                     else:
                         flagged_phrases.append(phrase)
         
-        # Remove duplicates
+        # Remove duplicates and empty strings
         flagged_phrases = list(set(filter(None, flagged_phrases)))
         
         return {
@@ -74,19 +74,19 @@ class ExplanationBuilder:
             template = self.templates[reason]
             
             # Add details based on reason type
-            if reason == "banned_keyword" and "rule_based" in results:
+            if reason == "banned_keyword" and "rule_based" in results and results["rule_based"]:
                 keywords = results["rule_based"].get("banned_keywords", [])
                 return template.format(keywords=", ".join(keywords))
             
-            elif reason == "suspicious_url" and "rule_based" in results:
+            elif reason == "suspicious_url" and "rule_based" in results and results["rule_based"]:
                 urls = results["rule_based"].get("suspicious_urls", [])
                 return template.format(urls=", ".join(urls))
             
-            elif reason == "toxicity" and "text_analysis" in results:
+            elif reason == "toxicity" and "text_analysis" in results and results["text_analysis"]:
                 score = results["text_analysis"].get("toxicity_score", 0)
                 return template.format(score=score)
             
-            elif reason == "nsfw" and "image_analysis" in results:
+            elif reason == "nsfw" and "image_analysis" in results and results["image_analysis"]:
                 prob = results["image_analysis"].get("nsfw_probability", 0)
                 return template.format(prob=prob)
             

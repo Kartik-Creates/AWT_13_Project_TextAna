@@ -14,13 +14,13 @@ function App() {
   useEffect(() => {
     const fetchPosts = async () => {
       try {
-        const response = await fetch("/api/posts");
+        const response = await fetch("/api/posts/");
         if (response.ok) {
           const data = await response.json();
           // Assuming the backend returns an array of objects
           if (Array.isArray(data)) {
             // Reverse to show newest at top assuming Mongo returns chronological
-            setPosts(data.reverse());
+            setPosts(data);
           }
         }
       } catch (error) {
@@ -41,7 +41,7 @@ function App() {
       if (text) formData.append("text", text);
       if (image) formData.append("image", image);
 
-      const response = await fetch("/api/posts", {
+      const response = await fetch("/api/posts/", {
         method: "POST",
         body: formData,
       });
@@ -52,8 +52,10 @@ function App() {
 
       const result = await response.json();
       
-      // Update dummy ID for UI key
-      result.id = Date.now().toString();
+      // Use the real backend id
+      if (!result.id) {
+        result.id = Date.now().toString();
+      }
       
       // Switch to feed and prepend newly analyzed post
       setActiveTab("feed");

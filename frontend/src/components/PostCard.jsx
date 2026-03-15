@@ -1,17 +1,21 @@
 import { motion } from "framer-motion";
-import { ShieldCheck, ShieldAlert, MoreHorizontal, MessageCircle, Repeat2, Heart, Share } from "lucide-react";
+import { ShieldCheck, ShieldAlert, ShieldQuestion, MoreHorizontal, MessageCircle, Repeat2, Heart, Share } from "lucide-react";
 
 export default function PostCard({ post }) {
-  const isAllowed = post.decision.allowed;
+  // Backend returns flat: { allowed: true/false/null, reasons: [...], flagged_phrases: [...] }
+  const isAllowed = post.allowed;
+  const isPending = post.allowed === null || post.allowed === undefined;
   
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
       className={`rounded-2xl p-4 sm:p-5 mb-4 transition-colors cursor-pointer group ${
-        isAllowed 
-          ? "glass-panel border border-gray-100 hover:bg-white/60" 
-          : "bg-rose-50/70 border border-rose-200 hover:bg-rose-100/60"
+        isPending
+          ? "glass-panel border border-amber-200 hover:bg-amber-50/60"
+          : isAllowed 
+            ? "glass-panel border border-gray-100 hover:bg-white/60" 
+            : "bg-rose-50/70 border border-rose-200 hover:bg-rose-100/60"
       }`}
     >
       <div className="flex gap-4 relative">
@@ -40,11 +44,11 @@ export default function PostCard({ post }) {
             {post.text}
           </p>
 
-          {/* Image */}
-          {post.imageUrl && (
+          {/* Image — backend sends image_path */}
+          {post.image_path && (
             <div className="mt-3 rounded-2xl overflow-hidden border border-gray-100 mb-3 bg-gray-50 max-h-[400px]">
               <img 
-                src={"http://localhost:8000" + post.imageUrl} 
+                src={"http://localhost:8000" + post.image_path} 
                 alt="Post content" 
                 className="w-full h-full object-cover"
               />
@@ -53,7 +57,12 @@ export default function PostCard({ post }) {
 
           {/* Moderation Badge */}
           <div className="mt-4 mb-2">
-            {isAllowed ? (
+            {isPending ? (
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-100 text-amber-700 text-sm font-medium shadow-[0_0_15px_rgba(245,158,11,0.15)]">
+                <ShieldQuestion className="w-4 h-4" />
+                <span>Pending: Awaiting moderation</span>
+              </div>
+            ) : isAllowed ? (
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-sm font-medium shadow-[0_0_15px_rgba(16,185,129,0.15)]">
                 <ShieldCheck className="w-4 h-4" />
                 <span>Allowed: Content approved</span>
@@ -65,9 +74,9 @@ export default function PostCard({ post }) {
                   <span>Blocked</span>
                 </div>
                 
-                {post.explanation && post.explanation.reasons && post.explanation.reasons.length > 0 && (
+                {post.reasons && post.reasons.length > 0 && (
                   <div className="text-sm text-rose-600 bg-rose-50/50 p-2.5 rounded-lg border border-rose-100 inline-block max-w-full truncate">
-                    Reason: {post.explanation.reasons[0]}
+                    Reason: {post.reasons[0]}
                   </div>
                 )}
               </div>

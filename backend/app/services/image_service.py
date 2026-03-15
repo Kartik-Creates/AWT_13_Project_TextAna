@@ -1,27 +1,26 @@
-from PIL import Image
-import torchvision.transforms as transforms
-import torchvision.models as models
-import torch
+"""
+Image Service — DEPRECATED
+This module is superseded by the moderation pipeline's ML models:
+  - app.ml.efficientnet_model  (NSFW detection)
+  - app.ml.clip_model          (image-text relevance)
 
-# load model once
-model = models.efficientnet_b0(pretrained=True)
-model.eval()
+Kept for reference only.  Do NOT import this file in production code.
+"""
 
-transform = transforms.Compose([
-    transforms.Resize((224,224)),
-    transforms.ToTensor()
-])
+import logging
+
+logger = logging.getLogger(__name__)
+
+logger.warning(
+    "image_service.py is DEPRECATED. "
+    "Use the moderation pipeline (app.services.moderation_service) instead."
+)
 
 
 def analyze_image(file):
-
-    if not file.filename.lower().endswith((".jpg",".jpeg",".png")):
-        return "INVALID_FILE"
-
-    image = Image.open(file.file).convert("RGB")
-    image = transform(image).unsqueeze(0)
-
-    with torch.no_grad():
-        output = model(image)
-
+    """
+    DEPRECATED — always returns 'SAFE'.
+    Use ModerationService.moderate_post() for real NSFW detection.
+    """
+    logger.warning("analyze_image() called — this function is deprecated")
     return "SAFE"
