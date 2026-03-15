@@ -1,143 +1,126 @@
 # backend/app/ml/efficientnet_model.py
+"""
+NSFW image detection using Falconsai/nsfw_image_detection (ViT-based).
+
+This replaces the old randomly-initialized EfficientNet classifier that
+never had trained NSFW weights. The Falconsai model is a Vision Transformer
+fine-tuned specifically for NSFW classification with two classes: 'nsfw' and 'normal'.
+"""
+
 import torch
-import torch.nn as nn
-from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
-from torchvision import transforms
 from PIL import Image
-import numpy as np
 from typing import Dict, Any, Optional
 import logging
 import os
 
+from .model_loader import model_loader
+
 logger = logging.getLogger(__name__)
 
+
 class EfficientNetNSFWDetector:
-    """NSFW content detection using EfficientNet"""
+    """NSFW content detection using Falconsai/nsfw_image_detection (ViT).
     
-    def __init__(self, model_path: Optional[str] = None):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"EfficientNet using device: {self.device}")
+    Despite the class name (kept for backward compat), this now uses a
+    properly trained ViT model from HuggingFace instead of the old
+    randomly-initialized EfficientNet head.
+    """
+    
+    def __init__(self):
+        self.device = model_loader.device
+        logger.info(f"NSFW Detector using device: {self.device}")
         
-        self.categories = ["safe", "porn", "sexy", "hentai", "drawings"]
-        self.nsfw_threshold = 0.7
+        self.nsfw_threshold = 0.5
+        self.categories = ["normal", "nsfw"]
         
-        # Try to load model with error handling
         try:
-            self.model = self._load_model(model_path)
+            self.model, self.processor = model_loader.load_nsfw_model()
+            self._model_loaded = True
+            logger.info("NSFW detector initialized with Falconsai model")
         except Exception as e:
-            logger.error(f"Failed to load model with primary method: {e}")
-            logger.info("Trying fallback loading method...")
-            self.model = self._load_model_fallback()
-        
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-        
-        logger.info("EfficientNet NSFW detector initialized")
-    
-    def _load_model(self, model_path: Optional[str] = None) -> nn.Module:
-        """Load model with proper weights"""
-        try:
-            # Clear any corrupted cache files
-            self._clean_cache_if_needed()
-            
-            # Use the new weights API
-            logger.info("Loading EfficientNet with DEFAULT weights")
-            weights = EfficientNet_B0_Weights.DEFAULT
-            model = efficientnet_b0(weights=weights)
-            
-            # Modify classifier
-            num_features = model.classifier[1].in_features
-            model.classifier[1] = nn.Linear(num_features, len(self.categories))
-            
-            if model_path and os.path.exists(model_path):
-                logger.info(f"Loading custom weights from {model_path}")
-                state_dict = torch.load(model_path, map_location=self.device)
-                model.load_state_dict(state_dict)
-            
-            model.to(self.device)
-            model.eval()
-            return model
-            
-        except Exception as e:
-            logger.error(f"Error in _load_model: {e}")
-            raise
-    
-    def _clean_cache_if_needed(self):
-        """Clean corrupted cache files"""
-        cache_dir = os.path.expanduser("~/.cache/torch/hub/checkpoints/")
-        if os.path.exists(cache_dir):
-            for f in os.listdir(cache_dir):
-                if "efficientnet" in f and f.endswith('.pth'):
-                    logger.info(f"Found cached file: {f}")
-    
-    def _load_model_fallback(self) -> nn.Module:
-        """Fallback loading method"""
-        try:
-            logger.info("Using fallback model loading")
-            import torchvision.models as models
-            model = models.efficientnet_b0(pretrained=False)
-            
-            num_features = model.classifier[1].in_features
-            model.classifier[1] = nn.Linear(num_features, len(self.categories))
-            
-            model.to(self.device)
-            model.eval()
-            logger.warning("Loaded EfficientNet without pretrained weights")
-            return model
-        except Exception as e:
-            logger.error(f"Fallback also failed: {e}")
-            raise
+            logger.error(f"Failed to load NSFW model: {e}")
+            self._model_loaded = False
     
     def analyze(self, image_path: str) -> Dict[str, Any]:
-        """Analyze image for NSFW content"""
+        """Analyze image for NSFW content.
+        
+        Returns dict with:
+          nsfw_probability          – float 0-1
+          is_nsfw                   – bool
+          primary_category          – 'nsfw' or 'normal'
+          category_probabilities    – dict {'nsfw': float, 'normal': float}
+          explicit_content_detected – bool (high-confidence NSFW)
+        """
+        if not self._model_loaded:
+            logger.warning("NSFW model not loaded, using conservative fallback")
+            return self._fallback_analysis(image_path)
+        
         try:
             image = Image.open(image_path).convert("RGB")
-            image_tensor = self.transform(image).unsqueeze(0).to(self.device)
+            
+            # Preprocess with the ViT processor
+            inputs = self.processor(images=image, return_tensors="pt").to(self.device)
             
             with torch.no_grad():
-                outputs = self.model(image_tensor)
-                probabilities = torch.softmax(outputs, dim=1)
-                
-                category_probs = {
-                    self.categories[i]: probabilities[0][i].item()
-                    for i in range(len(self.categories))
-                }
-                
-                nsfw_prob = sum([
-                    category_probs.get("porn", 0),
-                    category_probs.get("sexy", 0),
-                    category_probs.get("hentai", 0)
-                ])
-                
-                predicted_class = probabilities[0].argmax().item()
-                primary_category = self.categories[predicted_class]
-                
-                is_nsfw = nsfw_prob > self.nsfw_threshold or primary_category in ["porn", "hentai"]
+                outputs = self.model(**inputs)
+                logits = outputs.logits
+                probabilities = torch.softmax(logits, dim=1).squeeze(0)
+            
+            # Get the model's id2label mapping
+            id2label = self.model.config.id2label
+            
+            # Build category probabilities
+            category_probs = {}
+            for i in range(len(probabilities)):
+                label = id2label.get(i, f"class_{i}").lower()
+                category_probs[label] = round(probabilities[i].item(), 4)
+            
+            # Get NSFW probability — look for 'nsfw' label
+            nsfw_prob = category_probs.get("nsfw", 0.0)
+            normal_prob = category_probs.get("normal", 1.0)
+            
+            # Determine primary category  
+            predicted_idx = probabilities.argmax().item()
+            primary_category = id2label.get(predicted_idx, "unknown").lower()
+            
+            is_nsfw = nsfw_prob >= self.nsfw_threshold
             
             return {
-                "nsfw_probability": nsfw_prob,
+                "nsfw_probability": round(nsfw_prob, 4),
                 "is_nsfw": is_nsfw,
                 "primary_category": primary_category,
                 "category_probabilities": category_probs,
-                "explicit_content_detected": primary_category in ["porn", "hentai"]
+                "explicit_content_detected": nsfw_prob >= 0.8,
+                "model_used": "Falconsai/nsfw_image_detection",
             }
             
         except Exception as e:
-            logger.error(f"Error in analysis: {e}")
+            logger.error(f"Error in NSFW analysis: {e}", exc_info=True)
             return self._fallback_analysis(image_path)
     
     def _fallback_analysis(self, image_path: str) -> Dict[str, Any]:
-        """Fallback analysis"""
-        return {
-            "nsfw_probability": 0.3,
-            "is_nsfw": False,
-            "primary_category": "unknown",
-            "category_probabilities": {},
-            "explicit_content_detected": False,
-            "using_fallback": True
-        }
+        """Fallback: conservative — flag as needing review."""
+        try:
+            Image.open(image_path).verify()
+            return {
+                "nsfw_probability": 0.5,
+                "is_nsfw": False,
+                "primary_category": "review_needed",
+                "category_probabilities": {},
+                "explicit_content_detected": False,
+                "using_fallback": True,
+            }
+        except Exception:
+            # Can't even open the image — treat as suspicious
+            return {
+                "nsfw_probability": 0.8,
+                "is_nsfw": True,
+                "primary_category": "invalid_image",
+                "category_probabilities": {},
+                "explicit_content_detected": True,
+                "using_fallback": True,
+            }
 
+
+# Global instance
 efficientnet_nsfw = EfficientNetNSFWDetector()

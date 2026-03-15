@@ -1,42 +1,56 @@
 import torch
 import numpy as np
-from typing import Tuple, List, Dict, Any
+from typing import Dict, Any, List
 import logging
 from .model_loader import model_loader
-import re
 
 logger = logging.getLogger(__name__)
 
 class DistilBERTAnalyzer:
-    """Text analysis using DistilBERT"""
+    """Text toxicity analysis using unitary/toxic-bert.
+    
+    The model outputs 6 toxicity labels:
+      toxic, severe_toxic, obscene, threat, insult, identity_hate
+    Each label gets a sigmoid probability (0-1). We aggregate them
+    into a single toxicity score and determine the primary category.
+    """
+    
+    # The 6 labels from the Jigsaw toxic-comment dataset
+    LABELS = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+    
+    # Map model labels → human-readable categories for the decision engine
+    CATEGORY_MAP = {
+        "toxic": "toxic",
+        "severe_toxic": "highly_toxic",
+        "obscene": "sexual_content",
+        "threat": "violence",
+        "insult": "hate_speech",
+        "identity_hate": "discrimination",
+    }
     
     def __init__(self):
         self.model, self.tokenizer = model_loader.load_distilbert()
         self.device = model_loader.device
         
-        # Toxicity thresholds
-        self.toxicity_threshold = 0.7
-        self.hate_threshold = 0.6
-        
-        # Keyword patterns for flagged phrases
-        self.flagged_patterns = {
-            r'\b(hate|hates|hatred)\b': 'hate_speech',
-            r'\b(kill|murder|death|die)\b': 'violence',
-            r'\b(racist|racism)\b': 'discrimination',
-            r'\b(sexist|sexism)\b': 'discrimination',
-            r'\b(suicide|self.?harm)\b': 'self_harm',
-            r'\b(porn|nsfw|explicit)\b': 'sexual_content',
-            r'\b(scam|fraud|phishing)\b': 'scam',
-            r'\b(terrorist|terrorism)\b': 'terrorism'
-        }
+        # Per-label thresholds (sigmoid probabilities)
+        # Lower = more sensitive.  0.5 is the neutral decision boundary.
+        self.label_threshold = 0.5
+        # Aggregate toxicity threshold for the combined score
+        self.toxicity_threshold = 0.45
     
     def analyze(self, text: str) -> Dict[str, Any]:
-        """
-        Analyze text for toxic content
-        Returns: Dict with scores and flagged content
+        """Analyze text for toxic content using the fine-tuned model.
+        
+        Returns a dict with:
+          toxicity_score  – float 0-1 (max across labels)
+          label_scores    – dict of per-label sigmoid scores
+          is_toxic        – bool
+          category        – primary category string
+          flagged_labels  – list of labels that exceeded their threshold
+          confidence      – float 0-1
         """
         try:
-            # Tokenize input
+            # Tokenize
             inputs = self.tokenizer(
                 text,
                 return_tensors="pt",
@@ -45,91 +59,73 @@ class DistilBERTAnalyzer:
                 padding=True
             ).to(self.device)
             
-            # Get predictions
+            # Forward pass
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                logits = outputs.logits
-                probabilities = torch.softmax(logits, dim=-1)
+                logits = outputs.logits  # shape: (1, 6)
                 
-                # Get toxicity score (assuming class 1 is toxic)
-                toxicity_score = probabilities[0][1].item()
-                
-                # Get confidence
-                confidence = torch.max(probabilities).item()
+                # Sigmoid for multi-label (NOT softmax — each label is independent)
+                probabilities = torch.sigmoid(logits).squeeze(0)  # shape: (6,)
             
-            # Extract flagged phrases
-            flagged_phrases = self._extract_flagged_phrases(text)
+            # Build per-label score dict
+            label_scores = {}
+            flagged_labels = []
+            for i, label in enumerate(self.LABELS):
+                score = probabilities[i].item()
+                label_scores[label] = round(score, 4)
+                if score >= self.label_threshold:
+                    flagged_labels.append(label)
             
-            # Determine primary category
-            category = self._determine_category(toxicity_score, flagged_phrases)
+            # Aggregate toxicity score = max across all labels
+            toxicity_score = max(label_scores.values())
+            
+            # Determine primary category from highest-scoring label
+            primary_label = max(label_scores, key=label_scores.get)
+            category = self._determine_category(toxicity_score, primary_label, flagged_labels)
+            
+            is_toxic = toxicity_score >= self.toxicity_threshold or len(flagged_labels) > 0
             
             return {
-                "toxicity_score": toxicity_score,
-                "confidence": confidence,
+                "toxicity_score": round(toxicity_score, 4),
+                "label_scores": label_scores,
+                "is_toxic": is_toxic,
                 "category": category,
-                "flagged_phrases": flagged_phrases,
-                "is_toxic": toxicity_score > self.toxicity_threshold
+                "flagged_labels": flagged_labels,
+                "confidence": round(toxicity_score if is_toxic else (1.0 - toxicity_score), 4),
+                "flagged_phrases": [],  # kept for interface compat; rule engine handles keywords
             }
             
         except Exception as e:
-            logger.error(f"Error in DistilBERT analysis: {e}")
+            logger.error(f"Error in toxicity analysis: {e}", exc_info=True)
             return self._fallback_analysis(text)
     
-    def _extract_flagged_phrases(self, text: str) -> List[str]:
-        """Extract potentially problematic phrases"""
-        flagged = []
-        text_lower = text.lower()
-        
-        for pattern, category in self.flagged_patterns.items():
-            matches = re.finditer(pattern, text_lower)
-            for match in matches:
-                phrase = match.group()
-                if phrase and len(phrase) > 2:  # Ignore very short matches
-                    flagged.append({
-                        "phrase": phrase,
-                        "category": category
-                    })
-        
-        return flagged
-    
-    def _determine_category(self, score: float, flagged: List[str]) -> str:
-        """Determine the content category"""
-        if flagged:
-            # Get most severe category from flagged phrases
-            categories = [f["category"] for f in flagged]
-            severity_order = [
-                "terrorism", "violence", "self_harm", "hate_speech",
-                "discrimination", "sexual_content", "scam"
-            ]
-            
-            for severe in severity_order:
-                if severe in categories:
-                    return severe
-            
-            return categories[0] if categories else "toxic"
-        
-        if score > 0.9:
-            return "highly_toxic"
-        elif score > 0.7:
-            return "toxic"
-        elif score > 0.5:
-            return "questionable"
-        else:
+    def _determine_category(self, score: float, primary_label: str, flagged: List[str]) -> str:
+        """Map model output to a human-readable category."""
+        if not flagged and score < self.toxicity_threshold:
             return "safe"
+        
+        # Use the most severe flagged label
+        severity_order = [
+            "severe_toxic", "threat", "identity_hate", "toxic", "obscene", "insult"
+        ]
+        for label in severity_order:
+            if label in flagged:
+                return self.CATEGORY_MAP.get(label, label)
+        
+        # Fallback to primary label
+        return self.CATEGORY_MAP.get(primary_label, "toxic" if score > self.toxicity_threshold else "safe")
     
     def _fallback_analysis(self, text: str) -> Dict[str, Any]:
-        """Fallback analysis when model fails"""
-        logger.warning("Using fallback text analysis")
-        
-        # Simple keyword-based detection
-        flagged = self._extract_flagged_phrases(text)
-        
+        """Fallback when model fails — conservative (flag as suspicious)."""
+        logger.warning("Using fallback text analysis — marking as suspicious")
         return {
-            "toxicity_score": 0.5 if flagged else 0.1,
-            "confidence": 0.5,
-            "category": "flagged" if flagged else "unknown",
-            "flagged_phrases": flagged,
-            "is_toxic": bool(flagged)
+            "toxicity_score": 0.6,
+            "label_scores": {label: 0.0 for label in self.LABELS},
+            "is_toxic": True,
+            "category": "review_needed",
+            "flagged_labels": [],
+            "confidence": 0.3,
+            "flagged_phrases": [],
         }
 
 # Global instance

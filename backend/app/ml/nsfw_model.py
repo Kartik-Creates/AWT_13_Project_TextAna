@@ -1,8 +1,11 @@
 # backend/app/ml/nsfw_model.py
+"""
+NSFW detection wrapper that delegates to the EfficientNet (now ViT) detector.
+Provides backward-compatible interface and CLIP-based fallback.
+"""
+
 import torch
-import torch.nn.functional as F
 from PIL import Image
-from torchvision import transforms
 from typing import Dict, Any
 import logging
 
@@ -10,105 +13,83 @@ from app.ml.efficientnet_model import efficientnet_nsfw
 
 logger = logging.getLogger(__name__)
 
+
 class NSFWDetector:
-    """NSFW content detection in images using EfficientNet"""
+    """NSFW content detection wrapper.
+    
+    Primary: Falconsai/nsfw_image_detection (via efficientnet_nsfw)
+    Fallback: CLIP-based zero-shot NSFW detection
+    """
     
     def __init__(self):
-        """
-        Initialize NSFW detector using EfficientNet
-        """
-        logger.info("Initializing NSFWDetector with EfficientNet")
-        
-        # Use the EfficientNet detector
+        logger.info("Initializing NSFWDetector")
         self.detector = efficientnet_nsfw
-        
-        # For backward compatibility
         self.nsfw_threshold = self.detector.nsfw_threshold
         self.categories = self.detector.categories
-        
-        logger.info(f"NSFWDetector initialized with categories: {self.categories}")
-        logger.info(f"Using device: {self.detector.device}")
+        logger.info(f"NSFWDetector initialized, model loaded: {self.detector._model_loaded}")
     
     def analyze(self, image_path: str) -> Dict[str, Any]:
-        """
-        Analyze image for NSFW content using EfficientNet
-        
-        Args:
-            image_path: Path to image file
-            
-        Returns:
-            Dictionary with NSFW analysis results
-        """
+        """Analyze image for NSFW content."""
         try:
-            # Delegate to EfficientNet detector
             result = self.detector.analyze(image_path)
-            
-            # Add additional metadata
-            result["model_used"] = "EfficientNet-B0"
-            
+            result["model_used"] = result.get("model_used", "Falconsai/nsfw_image_detection")
             return result
             
         except Exception as e:
-            logger.error(f"Error in NSFW analysis: {e}")
+            logger.error(f"Primary NSFW analysis failed: {e}")
             return self._fallback_analysis(image_path)
     
     def _fallback_analysis(self, image_path: str) -> Dict[str, Any]:
-        """
-        Fallback analysis when EfficientNet fails
-        """
+        """Fallback: try CLIP, then conservative default."""
         logger.warning("Using fallback NSFW detection")
         
+        # Try CLIP-based detection
         try:
-            # Try CLIP as secondary fallback
             clip_result = self._clip_fallback(image_path)
             if clip_result:
                 return clip_result
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"CLIP fallback also failed: {e}")
         
-        # Ultimate fallback - conservative approach
+        # Ultimate fallback — conservative (flag for review, don't auto-approve)
         try:
-            image = Image.open(image_path)
+            Image.open(image_path).verify()
             return {
-                "nsfw_probability": 0.3,
+                "nsfw_probability": 0.5,
                 "is_nsfw": False,
-                "primary_category": "unknown",
-                "confidence": 0.5,
+                "primary_category": "review_needed",
+                "confidence": 0.3,
                 "category_probabilities": {},
                 "explicit_content_detected": False,
-                "using_fallback": True
+                "using_fallback": True,
             }
-        except:
+        except Exception:
             return {
-                "nsfw_probability": 0.8,
+                "nsfw_probability": 0.9,
                 "is_nsfw": True,
-                "primary_category": "invalid",
+                "primary_category": "invalid_image",
                 "confidence": 0.0,
                 "category_probabilities": {},
                 "explicit_content_detected": True,
-                "using_fallback": True
+                "using_fallback": True,
             }
     
     def _clip_fallback(self, image_path: str) -> Dict[str, Any]:
-        """
-        Use CLIP for NSFW detection as secondary fallback
-        """
+        """Use CLIP for zero-shot NSFW detection as secondary fallback."""
         try:
             import clip
-            from PIL import Image
             
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             model, preprocess = clip.load("ViT-B/32", device=device)
             
             image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
             
-            # NSFW prompts
             prompts = [
                 "a normal safe photo",
                 "pornography",
                 "nudity",
                 "explicit sexual content",
-                "violence and gore"
+                "violence and gore",
             ]
             
             text = clip.tokenize(prompts).to(device)
@@ -122,19 +103,21 @@ class NSFWDetector:
                 
                 similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)
             
+            # Sum of all NSFW prompt scores (indices 1-4)
             nsfw_score = similarity[0, 1:].sum().item()
             
             return {
-                "nsfw_probability": nsfw_score,
+                "nsfw_probability": round(nsfw_score, 4),
                 "is_nsfw": nsfw_score > 0.5,
                 "primary_category": "nsfw" if nsfw_score > 0.5 else "safe",
                 "using_clip_fallback": True,
                 "confidence": float(similarity[0].max().item()),
-                "explicit_content_detected": nsfw_score > 0.6
+                "explicit_content_detected": nsfw_score > 0.6,
             }
         except Exception as e:
             logger.error(f"CLIP fallback failed: {e}")
             return None
+
 
 # Global instance
 nsfw_detector = NSFWDetector()

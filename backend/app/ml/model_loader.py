@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
-import clip
 import logging
 import os
 from typing import Optional, Tuple, Any
@@ -30,46 +28,35 @@ class ModelLoader:
         self.models_dir.mkdir(exist_ok=True)
     
     def load_distilbert(self) -> Tuple[Any, Any]:
-        """Load DistilBERT model and tokenizer"""
+        """Load toxic-bert model and tokenizer for toxicity detection"""
         model_key = "distilbert"
         
         if model_key in self._models:
             return self._models[model_key]
         
         try:
-            logger.info("Loading DistilBERT model...")
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification
             
-            model_name = os.getenv("DISTILBERT_MODEL", "distilbert-base-uncased")
-            tokenizer = DistilBertTokenizer.from_pretrained(model_name)
-            model = DistilBertForSequenceClassification.from_pretrained(
-                model_name, 
-                num_labels=2  # Binary classification for toxicity
-            )
+            # Use unitary/toxic-bert — a BERT model fine-tuned on the Jigsaw
+            # toxic comment dataset with 6 toxicity labels:
+            #   toxic, severe_toxic, obscene, threat, insult, identity_hate
+            model_name = os.getenv("TOXICITY_MODEL", "unitary/toxic-bert")
+            logger.info(f"Loading toxicity model: {model_name}")
+            
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForSequenceClassification.from_pretrained(model_name)
             
             model.to(self.device)
             model.eval()
             
             self._models[model_key] = (model, tokenizer)
-            logger.info("DistilBERT loaded successfully")
+            logger.info(f"Toxicity model loaded successfully ({model_name})")
             
             return model, tokenizer
             
         except Exception as e:
-            logger.error(f"Error loading DistilBERT: {e}")
+            logger.error(f"Error loading toxicity model: {e}")
             raise
-    
-    def load_efficientnet(self, model_path=None):
-        """Load EfficientNet NSFW model"""
-        model_key = "efficientnet"
-        
-        if model_key in self._models:
-            return self._models[model_key]
-        
-        from app.ml.efficientnet_model import EfficientNetNSFWDetector
-        model = EfficientNetNSFWDetector(model_path)
-        
-        self._models[model_key] = model
-        return model
     
     def load_clip(self) -> Tuple[Any, Any]:
         """Load CLIP model"""
@@ -79,6 +66,8 @@ class ModelLoader:
             return self._models[model_key]
         
         try:
+            import clip
+            
             logger.info("Loading CLIP model...")
             
             model, preprocess = clip.load("ViT-B/32", device=self.device)
@@ -93,34 +82,29 @@ class ModelLoader:
             logger.error(f"Error loading CLIP: {e}")
             raise
     
-    def load_nsfw_model(self) -> Any:
-        """Load NSFW detection model"""
+    def load_nsfw_model(self) -> Tuple[Any, Any]:
+        """Load NSFW image classification model (Falconsai/nsfw_image_detection)"""
         model_key = "nsfw"
         
         if model_key in self._models:
             return self._models[model_key]
         
         try:
-            logger.info("Loading NSFW detection model...")
+            from transformers import AutoModelForImageClassification, ViTImageProcessor
             
-            # Using EfficientNet for NSFW detection
-            import torchvision.models as models
-            model = models.efficientnet_b0(pretrained=True)
+            model_name = os.getenv("NSFW_MODEL", "Falconsai/nsfw_image_detection")
+            logger.info(f"Loading NSFW model: {model_name}")
             
-            # Modify last layer for binary NSFW classification
-            num_features = model.classifier[1].in_features
-            model.classifier[1] = nn.Linear(num_features, 2)
-            
-            # Load pretrained weights (in production, load actual NSFW weights)
-            # model.load_state_dict(torch.load("path/to/nsfw_weights.pth"))
+            processor = ViTImageProcessor.from_pretrained(model_name)
+            model = AutoModelForImageClassification.from_pretrained(model_name)
             
             model.to(self.device)
             model.eval()
             
-            self._models[model_key] = model
-            logger.info("NSFW model loaded successfully")
+            self._models[model_key] = (model, processor)
+            logger.info(f"NSFW model loaded successfully ({model_name})")
             
-            return model
+            return model, processor
             
         except Exception as e:
             logger.error(f"Error loading NSFW model: {e}")
