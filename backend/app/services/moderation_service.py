@@ -68,13 +68,20 @@ class ModerationService:
                 if u.get("risk_level") in ("MEDIUM", "HIGH")
             ]
 
-            # ── Step 2: ML text analysis (toxic-bert) ──
+            # ── Step 2: ML text analysis (multilingual toxicity model) ──
             text_results = await self._run_sync(distilbert_analyzer.analyze, text)
             logger.info(
-                f"Toxic-bert: score={text_results.get('toxicity_score', 0):.4f}, "
+                f"Toxicity model: score={text_results.get('toxicity_score', 0):.4f}, "
                 f"category={text_results.get('category')}, "
                 f"flagged_labels={text_results.get('flagged_labels', [])}"
             )
+            
+            # Log Hindi detection if present
+            hindi = text_results.get("hindi_detection") or {}
+            if hindi.get("has_hindi_abuse"):
+                logger.warning(
+                    f"Hindi abuse detected: {hindi.get('matched_words', [])}"
+                )
             
             results = {
                 "rule_based": rule_results,

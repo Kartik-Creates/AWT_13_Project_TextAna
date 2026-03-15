@@ -13,6 +13,7 @@ motor>=3.3.2
 torch>=2.6.0
 torchvision>=0.21.0
 transformers>=4.48.0
+sentencepiece>=0.1.99  # Required by multilingual XLM-RoBERTa tokenizer
 # clip installed separately via: pip install git+https://github.com/openai/CLIP.git
 pillow>=10.1.0
 numpy>=1.26.0

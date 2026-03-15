@@ -2,6 +2,8 @@ import re
 from typing import List, Dict, Any, Set
 import logging
 
+from app.ml.text_normalizer import text_normalizer
+
 logger = logging.getLogger(__name__)
 
 class RuleEngine:
@@ -146,6 +148,14 @@ class RuleEngine:
             ):
                 results["spam_detected"] = True
                 results["violations"].append("spam")
+        # ── Step 4: Check Hindi/Hinglish abuse ──
+        hindi_check = text_normalizer.detect_hindi_abuse(text_stripped)
+        if hindi_check["has_hindi_abuse"]:
+            for word in hindi_check["matched_words"]:
+                results["banned_keywords"].append(word)
+                results["keyword_categories"].append("hindi_abuse")
+                results["violations"].append(f"hindi_abuse:{word}")
+        results["hindi_detection"] = hindi_check
         
         # ── Score ──
         unique_violations = len(set(results["violations"]))

@@ -28,35 +28,41 @@ class ModelLoader:
         self.models_dir.mkdir(exist_ok=True)
     
     def load_distilbert(self) -> Tuple[Any, Any]:
-        """Load toxic-bert model and tokenizer for toxicity detection"""
+        """Load toxicity model and tokenizer.
+
+        Primary:  unitary/multilingual-toxic-xlm-roberta  (supports Hindi + 100 languages)
+        Fallback: unitary/toxic-bert                      (English-only)
+        Both use the same 6 Jigsaw toxicity labels:
+            toxic, severe_toxic, obscene, threat, insult, identity_hate
+        """
         model_key = "distilbert"
-        
+
         if model_key in self._models:
             return self._models[model_key]
-        
-        try:
-            from transformers import AutoTokenizer, AutoModelForSequenceClassification
-            
-            # Use unitary/toxic-bert — a BERT model fine-tuned on the Jigsaw
-            # toxic comment dataset with 6 toxicity labels:
-            #   toxic, severe_toxic, obscene, threat, insult, identity_hate
-            model_name = os.getenv("TOXICITY_MODEL", "unitary/toxic-bert")
-            logger.info(f"Loading toxicity model: {model_name}")
-            
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForSequenceClassification.from_pretrained(model_name)
-            
-            model.to(self.device)
-            model.eval()
-            
-            self._models[model_key] = (model, tokenizer)
-            logger.info(f"Toxicity model loaded successfully ({model_name})")
-            
-            return model, tokenizer
-            
-        except Exception as e:
-            logger.error(f"Error loading toxicity model: {e}")
-            raise
+
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+        # Try multilingual model first (handles Hindi, Hinglish, etc.)
+        primary = os.getenv("TOXICITY_MODEL", "unitary/multilingual-toxic-xlm-roberta")
+        fallback = "unitary/toxic-bert"
+
+        for model_name in [primary, fallback]:
+            try:
+                logger.info(f"Loading toxicity model: {model_name}")
+                tokenizer = AutoTokenizer.from_pretrained(model_name)
+                model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                model.to(self.device)
+                model.eval()
+
+                self._models[model_key] = (model, tokenizer)
+                logger.info(f"Toxicity model loaded successfully ({model_name})")
+                return model, tokenizer
+
+            except Exception as e:
+                logger.warning(f"Could not load {model_name}: {e}")
+                if model_name == fallback:
+                    raise  # both failed
+                logger.info(f"Falling back to {fallback}")
     
     def load_clip(self) -> Tuple[Any, Any]:
         """Load CLIP model"""
