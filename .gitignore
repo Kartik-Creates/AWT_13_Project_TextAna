@@ -1,66 +1,33 @@
-# Python
+# Python libraries and venv
+venv/
+.venv/
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-*.egg-info/
-dist/
-build/
 
-# Virtual Environment
-backend/venv/
-frontend/node_modules/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Model weights (LARGE FILES - DON'T PUSH)
-*.pth
-*.pt
-*.bin
-*.onnx
-models/
-*.h5
-*.keras
-
-# Datasets (LARGE - DON'T PUSH)
-*.csv
-*.json
-*.parquet
-data/
-*.zip
-*.tar
-*.gz
-
-# Logs
-logs/
-*.log
-
-# Uploads
-uploads/
-*.jpg
-*.jpeg
-*.png
-*.gif
+# Node modules
+node_modules/
 
 # Environment variables
 .env
 *.env
 
-# Docker
-*.pid
-docker-compose.override.yml
+# Large ML models and checkpoints
+*.pth
+*.pt
+*.bin
+*.onnx
+*.safetensors
+models/
 
-# System files
+# Logs and transient data
+*.log
+uploads/
+dist/
+build/
+
+# IDE files
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
