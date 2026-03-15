@@ -11,7 +11,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import logging
 
-from app.api import posts
+from app.api import posts, metrics
 from app.db.mongodb import mongodb
 
 # Load environment variables
@@ -50,6 +50,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Include routers
 app.include_router(posts.router, prefix="/api/posts", tags=["posts"])
+app.include_router(metrics.router, prefix="/api/metrics", tags=["metrics"])
 
 @app.on_event("startup")
 async def startup_event():

@@ -3,6 +3,7 @@ import { Activity, SquarePen, LayoutDashboard } from "lucide-react";
 export default function Sidebar({ activeTab, setActiveTab }) {
   const navItems = [
     { id: "analytics", label: "Analytics", icon: Activity },
+    { id: "metrics", label: "Metrics", icon: LayoutDashboard },
     { id: "create", label: "Create Post", icon: SquarePen },
     { id: "feed", label: "Feed", icon: LayoutDashboard },
   ];

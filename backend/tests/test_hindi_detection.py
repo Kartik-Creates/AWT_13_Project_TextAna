@@ -93,7 +93,7 @@ for text, desc in safe:
 # ── 2. Full pipeline test (ML + Hindi) ──
 print("\n\n[2] FULL PIPELINE (ML model + Hindi detection)")
 try:
-    from app.ml.distilbert_model import distilbert_analyzer
+    from app.ml.roberta_model import roberta_analyzer
 
     full_cases = [
         # (text, should_be_toxic, description)
@@ -109,7 +109,7 @@ try:
     ]
 
     for text, expected_toxic, desc in full_cases:
-        result = distilbert_analyzer.analyze(text)
+        result = roberta_analyzer.analyze(text)
         score = result["toxicity_score"]
         is_toxic = result["is_toxic"]
         cat = result["category"]

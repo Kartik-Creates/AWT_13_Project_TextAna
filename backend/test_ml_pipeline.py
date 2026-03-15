@@ -77,9 +77,9 @@ for text, reason in harmful_texts:
 # ═══════════════════════════════════════════════════════════════════
 # 2. DistilBERT / toxic-bert
 # ═══════════════════════════════════════════════════════════════════
-print("\n\n📝 2. TOXIC-BERT (Text Toxicity Analysis)")
+print("\n\n📝 2. XLM-RoBERTa (Text Toxicity Analysis)")
 try:
-    from app.ml.distilbert_model import distilbert_analyzer
+    from app.ml.roberta_model import roberta_analyzer
 
     test_cases = [
         ("The weather is beautiful today", False, "safe text"),
@@ -90,7 +90,7 @@ try:
     ]
 
     for text, expected_toxic, desc in test_cases:
-        result = distilbert_analyzer.analyze(text)
+        result = roberta_analyzer.analyze(text)
         score = result["toxicity_score"]
         is_toxic = result["is_toxic"]
         cat = result["category"]

@@ -10,7 +10,7 @@ from app.services.text_processor import TextProcessor
 from app.services.decision_engine import DecisionEngine
 from app.services.explanation_builder import ExplanationBuilder
 from app.services.url_extractor import url_extractor
-from app.ml.distilbert_model import distilbert_analyzer
+from app.ml.roberta_model import roberta_analyzer
 from app.ml.clip_model import clip_analyzer
 from app.ml.nsfw_model import nsfw_detector
 from app.db.mongodb import post_repository
@@ -22,8 +22,8 @@ class ModerationService:
     
     Pipeline:
       1. Rule-based keyword / URL / spam checks
-      2. ML text toxicity (toxic-bert)
-      3. NSFW image detection (Falconsai ViT)
+      2. ML text toxicity (XLM-RoBERTa)
+      3. NSFW image detection (Falconsai/nsfw_image_detection)
       4. Image-text relevance (CLIP)
       5. Decision engine combines all signals
       6. Explanation builder generates human-readable output
@@ -43,6 +43,99 @@ class ModerationService:
         """Helper to run blocking ML calls in a thread pool."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, func, *args)
+
+    async def _record_metrics(self, post_id: str, text: str, results: Dict[str, Any]) -> None:
+        """Best-effort background metrics recording (non-blocking for main pipeline)."""
+        from app.services.metrics_repository import metrics_repository
+        from datetime import datetime
+        import time
+
+        try:
+            timestamp = datetime.utcnow()
+
+            # Text model metrics
+            text_res = results.get("text_analysis") or {}
+            if text_res:
+                hindi = text_res.get("hindi_detection") or {}
+                lang = "hindi" if hindi.get("has_hindi_abuse") else "unknown"
+                doc = {
+                    "timestamp": timestamp,
+                    "model": "roberta",
+                    "input_type": "text",
+                    "input_preview": text[:200],
+                    "prediction": {
+                        "category": text_res.get("category"),
+                        "is_toxic": text_res.get("is_toxic"),
+                        "toxicity_score": text_res.get("toxicity_score"),
+                        "label_scores": text_res.get("label_scores", {}),
+                    },
+                    "confidence": float(text_res.get("confidence", 0.0)),
+                    "response_time_ms": text_res.get("response_time_ms"),
+                    "language": lang,
+                    "category": text_res.get("category"),
+                    "correct": None,
+                    "user_feedback": None,
+                    "post_id": post_id,
+                }
+                metrics_repository.insert_prediction(doc)
+
+            # Image NSFW metrics
+            image_res = results.get("image_analysis") or {}
+            if image_res:
+                doc = {
+                    "timestamp": timestamp,
+                    "model": "efficientnet",
+                    "input_type": "image",
+                    "input_preview": "[image]",
+                    "prediction": {
+                        "primary_category": image_res.get("primary_category"),
+                        "is_nsfw": image_res.get("is_nsfw"),
+                        "nsfw_probability": image_res.get("nsfw_probability"),
+                    },
+                    "confidence": float(
+                        image_res.get(
+                            "nsfw_probability",
+                            0.0,
+                        )
+                    ),
+                    "response_time_ms": image_res.get("response_time_ms"),
+                    "language": None,
+                    "category": "nsfw" if image_res.get("is_nsfw") else "safe",
+                    "correct": None,
+                    "user_feedback": None,
+                    "post_id": post_id,
+                }
+                metrics_repository.insert_prediction(doc)
+
+            # CLIP relevance metrics
+            clip_res = results.get("relevance_analysis") or {}
+            if clip_res:
+                doc = {
+                    "timestamp": timestamp,
+                    "model": "clip",
+                    "input_type": "pair",
+                    "input_preview": text[:200],
+                    "prediction": {
+                        "similarity_score": clip_res.get("similarity_score"),
+                        "is_relevant": clip_res.get("is_relevant"),
+                        "mismatch_detected": clip_res.get("mismatch_detected"),
+                    },
+                    "confidence": float(
+                        abs(clip_res.get("similarity_score", 0.0))
+                    ),
+                    "response_time_ms": clip_res.get("response_time_ms"),
+                    "language": None,
+                    "category": "mismatch"
+                    if clip_res.get("mismatch_detected")
+                    else "safe",
+                    "correct": None,
+                    "user_feedback": None,
+                    "post_id": post_id,
+                }
+                metrics_repository.insert_prediction(doc)
+
+        except Exception as e:
+            logger.error(f"Failed to record metrics for post {post_id}: {e}", exc_info=True)
 
     async def moderate_post(
         self,
@@ -68,8 +161,8 @@ class ModerationService:
                 if u.get("risk_level") in ("MEDIUM", "HIGH")
             ]
 
-            # ── Step 2: ML text analysis (multilingual toxicity model) ──
-            text_results = await self._run_sync(distilbert_analyzer.analyze, text)
+            # ── Step 2: ML text analysis (multilingual toxicity model: XLM-RoBERTa) ──
+            text_results = await self._run_sync(roberta_analyzer.analyze, text)
             logger.info(
                 f"Toxicity model: score={text_results.get('toxicity_score', 0):.4f}, "
                 f"category={text_results.get('category')}, "
@@ -139,6 +232,15 @@ class ModerationService:
             # ── Step 5: Decision & Explanation ──
             decision = self.decision_engine.make_decision(results)
             explanation = self.explanation_builder.build_explanation(decision, results)
+
+            # ── Metrics recording (non-blocking) ──
+            try:
+                asyncio.create_task(
+                    self._record_metrics(post_id=post_id, text=text, results=results)
+                )
+            except RuntimeError:
+                # If no running loop, just fire-and-forget synchronously
+                await self._record_metrics(post_id=post_id, text=text, results=results)
             
             # ── Step 6: Update DB ──
             update_ok = post_repository.update_moderation_result(

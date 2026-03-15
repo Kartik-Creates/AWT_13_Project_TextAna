@@ -4,6 +4,7 @@ import AnalyticsPage from "./pages/AnalyticsPage";
 import FeedPage from "./pages/FeedPage";
 import CreatePost from "./components/CreatePost";
 import Loader from "./components/Loader";
+import MetricsDashboardPage from "./pages/MetricsDashboardPage";
 
 function App() {
   const [activeTab, setActiveTab] = useState("feed");
@@ -77,6 +78,7 @@ function App() {
       {/* Main Content Area */}
       <main className="flex-1 ml-64 p-4 sm:p-8 overflow-y-auto">
         {activeTab === "analytics" && <AnalyticsPage />}
+        {activeTab === "metrics" && <MetricsDashboardPage />}
         
         {activeTab === "create" && (
           <div className="max-w-3xl mx-auto mt-10">

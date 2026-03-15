@@ -53,6 +53,11 @@ class MongoDB:
         """Get posts collection"""
         return self._db.posts
     
+    @property
+    def prediction_metrics(self) -> Collection:
+        """Get prediction metrics collection"""
+        return self._db.prediction_metrics
+    
     def close(self) -> None:
         """Close database connection"""
         if self._client:
