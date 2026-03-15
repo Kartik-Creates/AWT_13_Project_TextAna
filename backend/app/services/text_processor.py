@@ -1,5 +1,6 @@
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from urllib.parse import urlparse
 import logging
 
 logger = logging.getLogger(__name__)

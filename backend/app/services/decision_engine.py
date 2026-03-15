@@ -8,14 +8,14 @@ class DecisionEngine:
     
     Decision flow (any trigger → reject):
       1. Rule engine violations (keywords, URLs, spam)
-      2. ML toxicity score from DistilBERT / toxic-bert
+      2. ML toxicity score from XLM-RoBERTa
       3. NSFW image detection
       4. Image-text relevance mismatch (CLIP)
     """
     
     def __init__(self):
         self.thresholds = {
-            "toxicity": 0.45,       # toxic-bert sigmoid — 0.45 gives good recall
+            "toxicity": 0.45,       # XLM-RoBERTa sigmoid — 0.45 gives good recall
             "nsfw": 0.5,            # Falconsai binary classification
             "rule_score": 0.49,     # ≥1 keyword violation
             "relevance": 0.12,      # CLIP similarity below this = mismatch
@@ -53,7 +53,7 @@ class DecisionEngine:
             if rules.get("spam_detected"):
                 decision["reasons"].append("spam")
 
-        # ── 2. Text Analysis (toxic-bert) ──
+        # ── 2. Text Analysis (XLM-RoBERTa) ──
         text = results.get("text_analysis") or {}
         if text:
             toxicity_score = text.get("toxicity_score", 0)
@@ -131,7 +131,7 @@ class DecisionEngine:
     
     @staticmethod
     def _map_label(label: str) -> str:
-        """Map toxic-bert label names to decision reasons."""
+        """Map XLM-RoBERTa label names to decision reasons."""
         mapping = {
             "toxic": "toxicity",
             "severe_toxic": "highly_toxic",

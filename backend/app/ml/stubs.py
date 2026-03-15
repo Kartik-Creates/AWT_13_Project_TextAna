@@ -3,7 +3,7 @@ Stub ML analyzers used when heavy ML dependencies (torch, transformers, clip)
 are not installed.  They perform basic keyword / heuristic analysis so the
 server can still start, accept posts, and return sensible moderation results.
 
-Updated to match the new toxic-bert and Falconsai model interfaces.
+Updated to match the XLM-RoBERTa and Falconsai model interfaces.
 """
 
 import re
@@ -13,7 +13,7 @@ from typing import Dict, Any, List
 logger = logging.getLogger(__name__)
 
 
-# ── Label names matching unitary/toxic-bert ──
+# ── Label names matching unitary/multilingual-toxic-xlm-roberta ──
 TOXICITY_LABELS = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
 
 # ── Keyword patterns for stub text analysis ──
@@ -29,11 +29,11 @@ _FLAGGED_PATTERNS = {
 }
 
 
-class StubDistilBERTAnalyzer:
+class StubRobertaAnalyzer:
     """Keyword-based text analysis fallback (no torch required).
     
-    Returns the same interface as the real DistilBERTAnalyzer (toxic-bert).
-    """
+    Returns the same interface as the real RobertaAnalyzer (XLM-RoBERTa).
+    """
 
     def __init__(self):
         logger.warning(

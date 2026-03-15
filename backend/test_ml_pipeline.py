@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Comprehensive ML Pipeline Test for Moderation System
-Tests all 3 models (toxic-bert, Falconsai NSFW, CLIP) + rule engine + decision engine
+Tests all 3 models (XLM-RoBERTa, Falconsai NSFW, CLIP) + rule engine + decision engine
 
 Run from the backend directory:
     python test_ml_pipeline.py
@@ -75,7 +75,7 @@ for text, reason in harmful_texts:
     check(f"\"{text}\" → violations={result['violations']}", len(result["violations"]) > 0)
 
 # ═══════════════════════════════════════════════════════════════════
-# 2. DistilBERT / toxic-bert
+# 2. XLM-RoBERTa (Text Toxicity)
 # ═══════════════════════════════════════════════════════════════════
 print("\n\n📝 2. XLM-RoBERTa (Text Toxicity Analysis)")
 try:
@@ -102,9 +102,9 @@ try:
             is_toxic == expected_toxic
         )
 
-    print("\n   ✅ toxic-bert tests complete")
+    print("\n   ✅ XLM-RoBERTa tests complete")
 except Exception as e:
-    print(f"   ❌ toxic-bert test failed: {e}")
+    print(f"   ❌ XLM-RoBERTa test failed: {e}")
     import traceback; traceback.print_exc()
 
 # ═══════════════════════════════════════════════════════════════════
