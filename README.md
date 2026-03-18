@@ -32,7 +32,7 @@ A modern, full-stack **AI Text and Image Content Moderation Dashboard** built wi
 
 Before you start, make sure you have the following installed on your machine:
 *   [Node.js](https://nodejs.org/) (v16+)
-*   [Python](https://www.python.org/) (v3.9+)
+*   [Python](https://www.python.org/) (**v3.10+**)
 *   [MongoDB Community Server](https://www.mongodb.com/try/download/community) running locally on the default port `27017`.
 
 ### 1. Setup the Backend API

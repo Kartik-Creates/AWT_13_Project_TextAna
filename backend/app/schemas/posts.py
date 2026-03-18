@@ -9,7 +9,8 @@ from datetime import datetime
 
 class PostBase(BaseModel):
     """Base post schema"""
-    text: str = Field(..., min_length=1, max_length=5000, description="Post content")
+    # Allow empty text for image-only posts (frontend uses "" as placeholder).
+    text: str = Field("", min_length=0, max_length=5000, description="Post content")
     image_path: Optional[str] = Field(None, description="Path to uploaded image")
     user_id: Optional[str] = Field(None, description="User ID (if authenticated)")
 
