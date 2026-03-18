@@ -1,143 +1,133 @@
+"""
+Decision Engine for Moderation System
+"""
+
 import logging
 from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
 class DecisionEngine:
-    """Makes final moderation decision by combining all analysis signals.
-    
-    Decision flow (any trigger → reject):
-      1. Rule engine violations (keywords, URLs, spam)
-      2. ML toxicity score from XLM-RoBERTa
-      3. NSFW image detection
-      4. Image-text relevance mismatch (CLIP)
-    """
+    """Makes final moderation decisions based on all signals"""
     
     def __init__(self):
-        self.thresholds = {
-            "toxicity": 0.45,       # XLM-RoBERTa sigmoid — 0.45 gives good recall
-            "nsfw": 0.5,            # Falconsai binary classification
-            "rule_score": 0.49,     # ≥1 keyword violation
-            "relevance": 0.12,      # CLIP similarity below this = mismatch
+        # Thresholds for blocking
+        self.block_thresholds = {
+            'toxicity': 0.7,
+            'sexual': 0.7,
+            'self_harm': 0.6,
+            'violence': 0.7,
+            'drugs': 0.7,
+            'threats': 0.7,
         }
         
-        # Categories that automatically reject regardless of score
-        self.critical_categories = {
-            "terrorism", "violence", "self_harm", "hate_speech",
-            "discrimination", "sexual_content", "highly_toxic",
-            "review_needed",
-        }
+        logger.info(f"✅ Decision Engine initialized with thresholds: {self.block_thresholds}")
+        logger.info("ℹ️ Rule score interpretation: HIGH score (>0.5) means violations detected")
     
-    def make_decision(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Combine all analysis results into a single allow/reject decision."""
-        decision = {
+    def make_decision(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Make moderation decision based on all inputs
+        
+        Args:
+            inputs: Dictionary containing:
+                - text_score: tech relevance (0-1)
+                - toxicity_score: toxicity level (0-1)
+                - sexual_score: sexual content (0-1)
+                - self_harm_score: self-harm (0-1)
+                - violence_score: violence (0-1)
+                - drugs_score: drugs (0-1)
+                - threats_score: threats (0-1)
+                - rule_score: rule-based score (0-1) - HIGHER means more violations!
+                - has_suspicious_urls: bool
+                - is_harmful: bool from model
+        """
+        
+        reasons = []
+        
+        # ── STEP 1: Check rule-based signals (fastest, most reliable) ──
+        rule_score = inputs.get('rule_score', 0)
+        if rule_score > 0.5:
+            logger.warning(f"❌ BLOCKING due to rule engine: score={rule_score:.2f} > 0.5")
+            return {
+                "allowed": False,
+                "reasons": ["rules"],
+                "confidence": rule_score,
+                "primary_category": "rules",
+                "severity": "high",
+                "score": rule_score
+            }
+        
+        # Check for suspicious URLs
+        if inputs.get('has_suspicious_urls', False):
+            logger.warning(f"❌ BLOCKING due to suspicious URLs")
+            return {
+                "allowed": False,
+                "reasons": ["suspicious_url"],
+                "confidence": 0.8,
+                "primary_category": "urls",
+                "severity": "medium",
+                "score": 0.8
+            }
+        
+        # ── STEP 2: Special rule for tech content (only if rules didn't block) ──
+        text_score = inputs.get('text_score', 0)
+        if text_score > 0.6:
+            harmful_scores = [
+                inputs.get('toxicity_score', 0),
+                inputs.get('sexual_score', 0),
+                inputs.get('self_harm_score', 0),
+                inputs.get('violence_score', 0),
+                inputs.get('drugs_score', 0),
+                inputs.get('threats_score', 0)
+            ]
+            avg_harmful = sum(harmful_scores) / len(harmful_scores) if harmful_scores else 0
+            
+            if avg_harmful < 0.5:
+                logger.info(f"✅ ALLOWING tech content: score={text_score:.2f}, avg_harmful={avg_harmful:.2f}")
+                return {
+                    "allowed": True,
+                    "reasons": ["tech_content"],
+                    "confidence": text_score,
+                    "primary_category": "tech",
+                    "severity": "low",
+                    "score": text_score
+                }
+        
+        # ── STEP 3: Check each ML category against its threshold ──
+        for category, threshold in self.block_thresholds.items():
+            score_key = f"{category}_score"
+            score = inputs.get(score_key, 0)
+            
+            if score > threshold:
+                logger.warning(f"❌ BLOCKING due to {category}: {score:.2f} > {threshold}")
+                return {
+                    "allowed": False,
+                    "reasons": [category],
+                    "confidence": score,
+                    "primary_category": category,
+                    "severity": "high",
+                    "score": score
+                }
+        
+        # ── STEP 4: If nothing triggered, check if model says it's harmful ──
+        if inputs.get('is_harmful', False):
+            logger.warning(f"⚠️ Model indicates harmful but no threshold exceeded - safe block")
+            return {
+                "allowed": False,
+                "reasons": ["harmful_content"],
+                "confidence": 0.6,
+                "primary_category": "flagged",
+                "severity": "medium",
+                "score": 0.6
+            }
+        
+        # ── STEP 5: Default: allow if nothing triggered ──
+        logger.info(f"✅ ALLOWING content: no violations detected")
+        return {
             "allowed": True,
-            "reasons": [],
-            "score": 1.0,
-            "severity": "none",
+            "reasons": ["safe"],
+            "confidence": 0.9,
+            "primary_category": "safe",
+            "severity": "low",
+            "score": 0.9
         }
-        
-        if not results:
-            return decision
-
-        # ── 1. Rule Engine (keywords / URLs / spam) ──
-        rules = results.get("rule_based") or {}
-        rule_score = rules.get("rule_score", 0)
-        
-        if rule_score > self.thresholds["rule_score"]:
-            decision["allowed"] = False
-            if rules.get("banned_keywords"):
-                decision["reasons"].append("banned_keyword")
-            if rules.get("suspicious_urls"):
-                decision["reasons"].append("suspicious_url")
-            if rules.get("spam_detected"):
-                decision["reasons"].append("spam")
-
-        # ── 2. Text Analysis (XLM-RoBERTa) ──
-        text = results.get("text_analysis") or {}
-        if text:
-            toxicity_score = text.get("toxicity_score", 0)
-            category = text.get("category", "safe")
-            is_toxic = text.get("is_toxic", False)
-            
-            # High toxicity score → reject
-            if toxicity_score > self.thresholds["toxicity"] or is_toxic:
-                decision["allowed"] = False
-                decision["reasons"].append(category if category != "safe" else "toxicity")
-            
-            # Critical category → always reject
-            if category in self.critical_categories:
-                decision["allowed"] = False
-                if category not in decision["reasons"]:
-                    decision["reasons"].append(category)
-            
-            # Check individual flagged labels from multi-label model
-            flagged_labels = text.get("flagged_labels", [])
-            if flagged_labels:
-                decision["allowed"] = False
-                for label in flagged_labels:
-                    mapped = self._map_label(label)
-                    if mapped not in decision["reasons"]:
-                        decision["reasons"].append(mapped)
-
-        # ── 3. Image Analysis (NSFW) ──
-        image = results.get("image_analysis") or {}
-        if image:
-            nsfw_prob = image.get("nsfw_probability", 0)
-            if nsfw_prob > self.thresholds["nsfw"]:
-                decision["allowed"] = False
-                decision["reasons"].append("nsfw")
-            if image.get("explicit_content_detected"):
-                decision["allowed"] = False
-                if "explicit" not in decision["reasons"]:
-                    decision["reasons"].append("explicit")
-
-        # ── 4. Image-Text Relevance (CLIP) ──
-        relevance = results.get("relevance_analysis") or {}
-        if relevance:
-            sim_score = relevance.get("similarity_score", 1.0)
-            if relevance.get("mismatch_detected") or sim_score < self.thresholds["relevance"]:
-                decision["allowed"] = False
-                if "mismatch" not in decision["reasons"]:
-                    decision["reasons"].append("mismatch")
-
-        # ── 5. URL Analysis ──
-        url_analysis = results.get("url_analysis") or {}
-        if url_analysis.get("has_suspicious_urls"):
-            decision["allowed"] = False
-            if "suspicious_url" not in decision["reasons"]:
-                decision["reasons"].append("suspicious_url")
-
-        # ── Final scoring ──
-        if not decision["allowed"]:
-            rule_s = rule_score
-            text_s = text.get("toxicity_score", 0) if text else 0
-            img_s = image.get("nsfw_probability", 0) if image else 0
-            
-            max_risk = max(rule_s, text_s, img_s)
-            decision["score"] = round(1.0 - max_risk, 4)
-            
-            if max_risk > 0.8:
-                decision["severity"] = "high"
-            elif max_risk > 0.5:
-                decision["severity"] = "medium"
-            else:
-                decision["severity"] = "low"
-        
-        # De-duplicate reasons
-        decision["reasons"] = list(dict.fromkeys(decision["reasons"]))
-        
-        return decision
-    
-    @staticmethod
-    def _map_label(label: str) -> str:
-        """Map XLM-RoBERTa label names to decision reasons."""
-        mapping = {
-            "toxic": "toxicity",
-            "severe_toxic": "highly_toxic",
-            "obscene": "sexual_content",
-            "threat": "violence",
-            "insult": "hate_speech",
-            "identity_hate": "discrimination",
-        }
-        return mapping.get(label, label)

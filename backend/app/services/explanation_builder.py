@@ -7,20 +7,25 @@ class ExplanationBuilder:
     """Builds human-readable explanations for moderation decisions"""
     
     def __init__(self):
-        # Reason templates
         self.templates = {
+            # Rule-based
             "banned_keyword": "Banned keyword detected: {keywords}",
             "suspicious_url": "Suspicious URL detected: {urls}",
             "spam": "Content appears to be spam",
-            "toxicity": "Toxic or harmful language detected (score: {score:.2f})",
-            "hate_speech": "Hate speech detected in content",
+            "rules": "Content triggered safety rules",
+            
+            # Text-based categories
+            "toxicity": "Toxic or harmful language detected",
+            "sexual": "Sexual content detected",
+            "self_harm": "Content related to self-harm or suicide detected",
             "violence": "Violent content detected",
-            "self_harm": "Content related to self-harm detected",
-            "nsfw": "NSFW content detected in image (probability: {prob:.2f})",
-            "explicit": "Explicit content detected",
-            "mismatch": "Image content doesn't match the text description",
-            "terrorism": "Content related to terrorism detected",
-            "discrimination": "Discriminatory content detected"
+            "drugs": "Drug-related content detected",
+            "threats": "Threatening content detected",
+            
+            # Safe categories
+            "tech_content": "✅ Technology content approved",
+            "safe": "✅ No issues detected",
+            "safe_content": "✅ Content approved"
         }
     
     def build_explanation(self, decision: Dict[str, Any], 
@@ -32,15 +37,16 @@ class ExplanationBuilder:
         reasons = []
         flagged_phrases = []
         
-        # Get decision reasons
+        # Get decision reasons (these are just category names)
         decision_reasons = decision.get("reasons", [])
         
         for reason in decision_reasons:
-            explanation = self._format_reason(reason, results)
-            if explanation:
-                reasons.append(explanation)
+            if reason in self.templates:
+                reasons.append(self.templates[reason])
+            else:
+                reasons.append(reason)
         
-        # Extract flagged phrases from results
+        # Extract flagged phrases from rule engine
         if "rule_based" in results and results["rule_based"]:
             rule_results = results["rule_based"]
             if rule_results.get("banned_keywords"):
@@ -48,59 +54,22 @@ class ExplanationBuilder:
             if rule_results.get("suspicious_urls"):
                 flagged_phrases.extend(rule_results["suspicious_urls"])
         
-        if "text_analysis" in results and results["text_analysis"]:
-            text_results = results["text_analysis"]
-            if isinstance(text_results, dict) and text_results.get("flagged_phrases"):
-                for phrase in text_results["flagged_phrases"]:
-                    if isinstance(phrase, dict):
-                        flagged_phrases.append(phrase.get("phrase", ""))
-                    else:
-                        flagged_phrases.append(phrase)
-        
-        # Remove duplicates and empty strings
+        # Remove duplicates
         flagged_phrases = list(set(filter(None, flagged_phrases)))
         
         return {
             "reasons": reasons,
             "flagged_phrases": flagged_phrases,
-            "severity": decision.get("severity", "unknown"),
+            "severity": decision.get("severity", "low"),
             "score": decision.get("score", 1.0)
         }
     
-    def _format_reason(self, reason: str, results: Dict[str, Any]) -> str:
-        """Format a specific reason with details"""
-        
-        if reason in self.templates:
-            template = self.templates[reason]
-            
-            # Add details based on reason type
-            if reason == "banned_keyword" and "rule_based" in results and results["rule_based"]:
-                keywords = results["rule_based"].get("banned_keywords", [])
-                return template.format(keywords=", ".join(keywords))
-            
-            elif reason == "suspicious_url" and "rule_based" in results and results["rule_based"]:
-                urls = results["rule_based"].get("suspicious_urls", [])
-                return template.format(urls=", ".join(urls))
-            
-            elif reason == "toxicity" and "text_analysis" in results and results["text_analysis"]:
-                score = results["text_analysis"].get("toxicity_score", 0)
-                return template.format(score=score)
-            
-            elif reason == "nsfw" and "image_analysis" in results and results["image_analysis"]:
-                prob = results["image_analysis"].get("nsfw_probability", 0)
-                return template.format(prob=prob)
-            
-            else:
-                return template
-            
-        return reason
-    
-    def get_summary(self, reasons: List[str]) -> str:
+    def get_summary(self, reasons: List[str], allowed: bool = True) -> str:
         """Get a brief summary of why content was rejected"""
         if not reasons:
-            return "Content approved"
+            return "Content approved" if allowed else "Content rejected"
         
         if len(reasons) == 1:
-            return f"Rejected: {reasons[0]}"
+            return f"{'Approved' if allowed else 'Rejected'}: {reasons[0]}"
         
-        return f"Rejected: {len(reasons)} policy violations detected"
+        return f"{'Approved' if allowed else 'Rejected'}: {len(reasons)} policy violations detected"

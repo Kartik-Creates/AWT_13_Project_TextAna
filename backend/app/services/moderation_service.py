@@ -17,12 +17,172 @@ from app.db.mongodb import post_repository
 
 logger = logging.getLogger(__name__)
 
+# Try to import the multitask model, but have a fallback
+try:
+    from app.ml.multitask_model import get_multitask_moderator
+    USE_ML_MODEL = True
+    logger.info("✅ Successfully imported multitask model")
+except ImportError as e:
+    logger.warning(f"⚠️ Could not import multitask model: {e}, using fallback")
+    USE_ML_MODEL = False
+    
+    # Define a simple fallback model
+    class FallbackModerator:
+        """Simple keyword-based fallback when ML model isn't available"""
+        
+        def __init__(self):
+            logger.info("Initializing FallbackModerator with keyword rules")
+            
+            # Comprehensive keyword lists
+            self.drug_keywords = [
+                'snow', 'nose candy', 'xannies', 'pills', 'plug', 'colombian', 
+                'party favors', 'white powder', 'h3r0in', 'fent', 'kush', 
+                'gas', 'exotic', 'blues', 'tele', 'moonrocks', 'xan', 'perc',
+                'oxy', 'pain relief', 'anxiety', 'medication', 'shipment'
+            ]
+            
+            self.sexual_keywords = [
+                'mouth do tricks', 'warm that bed', 'slide in', 'raw', 'taste',
+                'bed tonight', 'nudes', 'pics', 'forced', 'creampie', 'slut',
+                'tied up', 'breed', 'whore', 'c*ck', 'd*ck', 'pussy', 'tits',
+                'consent', 'unconscious', 'location', 'meet me', 'old vids'
+            ]
+            
+            self.self_harm_keywords = [
+                'rope', 'pills lined up', 'jump', 'final exit', 'voices',
+                'courage', 'check out', 'stop the pain', 'disappeared',
+                'quiet spot', 'clock out', 'vanish', 'fading out', 'ending it',
+                'suicide', 'kill myself', 'no reason', 'better off dead'
+            ]
+            
+            self.violence_keywords = [
+                'learn today', 'lights out', 'consequences', 'actions',
+                'clapped', 'smoke', 'handle', 'piece', 'tool', 'caught',
+                'air out', 'catch these hands', 'catch a body', 'rolling deep',
+                'squad', 'stretched', 'pay', 'revenge', 'teaching'
+            ]
+            
+            self.threat_keywords = [
+                'one more word', 'gonna make sure', 'never opens', 'warning',
+                'last time', 'regret', 'find out', 'coming for', 'waiting'
+            ]
+            
+            self.tech_keywords = [
+                'python', 'react', 'javascript', 'docker', 'kubernetes',
+                'api', 'code', 'async/await', 'microservices', 'container',
+                'deployed', 'production', 'debug', 'frontend', 'backend',
+                'database', 'sql', 'nosql', 'mongodb', 'postgresql',
+                'machine learning', 'ai', 'neural network', 'algorithm',
+                'programming', 'software', 'app', 'website', 'web dev'
+            ]
+            
+            self.hate_speech_keywords = [
+                'nazis', 'kristallnacht', 'purify', 'gene pool', 'removed',
+                'eradicated', 'final solution', 'cleansing', 'pure', 'disease'
+            ]
+            
+            self.scam_keywords = [
+                'millionaire', 'free money', 'glitch', 'passive', 'no job',
+                'work from home', 'payouts', 'blueprint', 'crypto', 'eth',
+                'bitcoin', 'returns', 'investment', 'guaranteed', 'signals'
+            ]
+        
+        def analyze(self, text: str) -> Dict[str, any]:
+            """Analyze text using keyword matching"""
+            text_lower = text.lower()
+            
+            # Initialize scores
+            scores = {
+                'toxicity': 0.0,
+                'sexual': 0.0,
+                'self_harm': 0.0,
+                'violence': 0.0,
+                'drugs': 0.0,
+                'threats': 0.0,
+                'tech_relevance': 0.0
+            }
+            
+            flagged_categories = []
+            
+            # Check each category
+            for keyword in self.drug_keywords:
+                if keyword in text_lower:
+                    scores['drugs'] = max(scores['drugs'], 0.9)
+                    scores['toxicity'] = max(scores['toxicity'], 0.7)
+                    if 'drugs' not in flagged_categories:
+                        flagged_categories.append('drugs')
+            
+            for keyword in self.sexual_keywords:
+                if keyword in text_lower:
+                    scores['sexual'] = max(scores['sexual'], 0.9)
+                    scores['toxicity'] = max(scores['toxicity'], 0.7)
+                    if 'sexual' not in flagged_categories:
+                        flagged_categories.append('sexual')
+            
+            for keyword in self.self_harm_keywords:
+                if keyword in text_lower:
+                    scores['self_harm'] = max(scores['self_harm'], 0.9)
+                    if 'self_harm' not in flagged_categories:
+                        flagged_categories.append('self_harm')
+            
+            for keyword in self.violence_keywords:
+                if keyword in text_lower:
+                    scores['violence'] = max(scores['violence'], 0.9)
+                    scores['toxicity'] = max(scores['toxicity'], 0.8)
+                    if 'violence' not in flagged_categories:
+                        flagged_categories.append('violence')
+            
+            for keyword in self.threat_keywords:
+                if keyword in text_lower:
+                    scores['threats'] = max(scores['threats'], 0.8)
+                    scores['toxicity'] = max(scores['toxicity'], 0.7)
+                    if 'threats' not in flagged_categories:
+                        flagged_categories.append('threats')
+            
+            for keyword in self.hate_speech_keywords:
+                if keyword in text_lower:
+                    scores['toxicity'] = max(scores['toxicity'], 1.0)
+                    scores['violence'] = max(scores['violence'], 0.9)
+                    if 'hate_speech' not in flagged_categories:
+                        flagged_categories.append('hate_speech')
+            
+            for keyword in self.scam_keywords:
+                if keyword in text_lower:
+                    scores['toxicity'] = max(scores['toxicity'], 0.5)
+                    if 'scam' not in flagged_categories:
+                        flagged_categories.append('scam')
+            
+            # Check tech keywords (these should ALLOW the post)
+            for keyword in self.tech_keywords:
+                if keyword in text_lower:
+                    scores['tech_relevance'] = max(scores['tech_relevance'], 0.9)
+            
+            # Determine if harmful
+            harmful_categories = ['drugs', 'sexual', 'self_harm', 'violence', 'threats']
+            is_harmful = any(scores[cat] > 0.5 for cat in harmful_categories)
+            
+            # Calculate max harm score
+            max_harm = max([scores[cat] for cat in harmful_categories] + [0])
+            
+            return {
+                'scores': scores,
+                'flagged_categories': flagged_categories,
+                'is_harmful': is_harmful,
+                'max_harm_score': max_harm,
+                'is_tech_relevant': scores['tech_relevance'] > 0.7,
+                'primary_category': flagged_categories[0] if flagged_categories else 'safe',
+                'processing_time_ms': 10  # Simulated fast processing
+            }
+    
+    fallback_model = FallbackModerator()
+
+
 class ModerationService:
     """Orchestrates the entire moderation pipeline.
     
     Pipeline:
       1. Rule-based keyword / URL / spam checks
-      2. ML text toxicity (XLM-RoBERTa)
+      2. ML text toxicity (XLM-RoBERTa or MultiTask model)
       3. NSFW image detection (Falconsai/nsfw_image_detection)
       4. Image-text relevance (CLIP)
       5. Decision engine combines all signals
@@ -37,7 +197,7 @@ class ModerationService:
         self.text_processor = TextProcessor()
         self.decision_engine = DecisionEngine()
         self.explanation_builder = ExplanationBuilder()
-        logger.info("Moderation service initialized")
+        logger.info("✅ Moderation service initialized")
 
     async def _run_sync(self, func, *args):
         """Helper to run blocking ML calls in a thread pool."""
@@ -56,23 +216,21 @@ class ModerationService:
             # Text model metrics
             text_res = results.get("text_analysis") or {}
             if text_res:
-                hindi = text_res.get("hindi_detection") or {}
-                lang = "hindi" if hindi.get("has_hindi_abuse") else "unknown"
                 doc = {
                     "timestamp": timestamp,
-                    "model": "roberta",
+                    "model": "multitask" if USE_ML_MODEL else "fallback",
                     "input_type": "text",
                     "input_preview": text[:200],
                     "prediction": {
-                        "category": text_res.get("category"),
-                        "is_toxic": text_res.get("is_toxic"),
-                        "toxicity_score": text_res.get("toxicity_score"),
-                        "label_scores": text_res.get("label_scores", {}),
+                        "scores": text_res.get("scores", {}),
+                        "flagged_categories": text_res.get("flagged_categories", []),
+                        "is_harmful": text_res.get("is_harmful", False),
+                        "primary_category": text_res.get("primary_category"),
                     },
-                    "confidence": float(text_res.get("confidence", 0.0)),
-                    "response_time_ms": text_res.get("response_time_ms"),
-                    "language": lang,
-                    "category": text_res.get("category"),
+                    "confidence": float(text_res.get("max_harm_score", 0.0)),
+                    "response_time_ms": text_res.get("processing_time_ms"),
+                    "language": "unknown",
+                    "category": text_res.get("primary_category", "unknown"),
                     "correct": None,
                     "user_feedback": None,
                     "post_id": post_id,
@@ -144,15 +302,22 @@ class ModerationService:
         image_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run full moderation pipeline on a post."""
-        logger.info(f"Starting moderation for post: {post_id}")
+        logger.info(f"▶️ Starting moderation for post: {post_id}")
         
         try:
             # ── Step 1: Rule-based checks (fast, no ML) ──
             rule_results = self.rule_engine.check_rules(text)
-            logger.info(
-                f"Rule engine: score={rule_results.get('rule_score', 0):.2f}, "
-                f"violations={rule_results.get('violations', [])}"
-            )
+            
+            # Log rule results in detail
+            logger.info(f"📋 Rule engine results:")
+            logger.info(f"  - Score: {rule_results.get('rule_score', 0):.2f}")
+            logger.info(f"  - Violations: {rule_results.get('violations', [])}")
+            
+            if rule_results.get('banned_keywords'):
+                logger.warning(f"  - Banned keywords: {rule_results.get('banned_keywords')}")
+            
+            if rule_results.get('hindi_detection', {}).get('has_hindi_abuse'):
+                logger.warning(f"  - Hindi abuse: {rule_results.get('hindi_detection', {}).get('matched_words')}")
             
             # ── Step 1b: URL extraction ──
             urls = url_extractor.extract_urls(text)
@@ -160,21 +325,79 @@ class ModerationService:
                 u for u in urls
                 if u.get("risk_level") in ("MEDIUM", "HIGH")
             ]
-
-            # ── Step 2: ML text analysis (multilingual toxicity model: XLM-RoBERTa) ──
-            text_results = await self._run_sync(roberta_analyzer.analyze, text)
-            logger.info(
-                f"Toxicity model: score={text_results.get('toxicity_score', 0):.4f}, "
-                f"category={text_results.get('category')}, "
-                f"flagged_labels={text_results.get('flagged_labels', [])}"
-            )
             
-            # Log Hindi detection if present
-            hindi = text_results.get("hindi_detection") or {}
-            if hindi.get("has_hindi_abuse"):
-                logger.warning(
-                    f"Hindi abuse detected: {hindi.get('matched_words', [])}"
+            if suspicious_urls:
+                logger.warning(f"  - Suspicious URLs: {suspicious_urls}")
+
+            # EARLY EXIT: If rule score is very high, block immediately
+            if rule_results.get('rule_score', 0) > 0.8:
+                logger.warning(f"🛑 EARLY BLOCK by rule engine: score={rule_results.get('rule_score', 0):.2f}")
+                
+                # Create minimal results for early block
+                results = {
+                    "rule_based": rule_results,
+                    "text_analysis": {"scores": {}, "flagged_categories": []},
+                    "url_analysis": {
+                        "all_urls": urls,
+                        "suspicious_urls": suspicious_urls,
+                        "has_suspicious_urls": len(suspicious_urls) > 0,
+                    }
+                }
+                
+                # Create decision input
+                decision_input = {
+                    'rule_score': rule_results.get('rule_score', 1.0),
+                    'has_suspicious_urls': len(suspicious_urls) > 0,
+                    'text_score': 0.0,
+                    'toxicity_score': 0.0,
+                    'sexual_score': 0.0,
+                    'self_harm_score': 0.0,
+                    'violence_score': 0.0,
+                    'drugs_score': 0.0,
+                    'threats_score': 0.0,
+                    'is_harmful': True
+                }
+                
+                decision = self.decision_engine.make_decision(decision_input)
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                
+                # Update DB
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=decision["allowed"],
+                    reasons=explanation.get("reasons", []),
+                    flagged_phrases=explanation.get("flagged_phrases", []),
                 )
+                
+                return {
+                    "post_id": post_id,
+                    "allowed": decision["allowed"],
+                    "results": results,
+                }
+
+            # ── Step 2: ML text analysis ──
+            try:
+                if USE_ML_MODEL:
+                    # Use the advanced multi-task model
+                    model = get_multitask_moderator()
+                    text_results = await self._run_sync(model.analyze, text)
+                    logger.info(f"✅ Multi-task model analysis complete")
+                else:
+                    # Use fallback model
+                    text_results = fallback_model.analyze(text)
+                    logger.info(f"✅ Fallback model analysis complete")
+                
+                logger.info(
+                    f"📊 Text analysis: harmful={text_results.get('is_harmful', False)}, "
+                    f"flagged={text_results.get('flagged_categories', [])}, "
+                    f"tech={text_results.get('is_tech_relevant', False)}"
+                )
+                
+            except Exception as e:
+                logger.error(f"❌ Text analysis failed: {e}", exc_info=True)
+                # If ML fails, use fallback
+                text_results = fallback_model.analyze(text)
+                logger.info(f"⚠️ Used fallback after ML failure")
             
             results = {
                 "rule_based": rule_results,
@@ -200,7 +423,7 @@ class ModerationService:
                             nsfw_detector.analyze, full_image_path
                         )
                         logger.info(
-                            f"NSFW: prob={nsfw_results.get('nsfw_probability', 0):.4f}, "
+                            f"🖼️ NSFW: prob={nsfw_results.get('nsfw_probability', 0):.4f}, "
                             f"is_nsfw={nsfw_results.get('is_nsfw')}"
                         )
                         results["image_analysis"] = nsfw_results
@@ -221,16 +444,68 @@ class ModerationService:
                             clip_analyzer.analyze, text, full_image_path
                         )
                         logger.info(
-                            f"CLIP: similarity={clip_results.get('similarity_score', 0):.4f}"
+                            f"🔄 CLIP: similarity={clip_results.get('similarity_score', 0):.4f}"
                         )
                         results["relevance_analysis"] = clip_results
                     except Exception as e:
                         logger.error(f"CLIP analysis failed: {e}")
                 else:
-                    logger.warning(f"Image file not found: {full_image_path}")
+                    logger.warning(f"⚠️ Image file not found: {full_image_path}")
             
             # ── Step 5: Decision & Explanation ──
-            decision = self.decision_engine.make_decision(results)
+            # Extract scores for decision engine
+            text_scores = text_results.get('scores', {})
+            
+            # Debug logging
+            logger.debug(f"Raw text scores: {text_scores}")
+
+            # Create a mapping from model keys to decision engine keys
+            score_mapping = {
+                'tech_relevance': 'text_score',
+                'toxicity': 'toxicity_score',
+                'sexual': 'sexual_score',
+                'self_harm': 'self_harm_score',
+                'violence': 'violence_score',
+                'drugs': 'drugs_score',
+                'threats': 'threats_score'
+            }
+
+            # Build decision input with proper mapping
+            decision_input = {
+                'rule_score': rule_results.get('rule_score', 1.0),
+                'has_suspicious_urls': len(suspicious_urls) > 0,
+                'is_harmful': text_results.get('is_harmful', False)
+            }
+
+            # Add mapped scores
+            for model_key, decision_key in score_mapping.items():
+                decision_input[decision_key] = text_scores.get(model_key, 0.0)
+
+            # If flagged categories exist but scores are zero, use fallback scores
+            flagged = text_results.get('flagged_categories', [])
+            if flagged and all(decision_input.get(k, 0) == 0 for k in ['self_harm_score', 'violence_score', 'drugs_score', 'sexual_score', 'threats_score']):
+                logger.warning("⚠️ Flagged categories but zero scores detected - applying fallback scores")
+                
+                # Apply reasonable scores based on flagged categories
+                for category in flagged:
+                    if category == 'self_harm':
+                        decision_input['self_harm_score'] = 0.8
+                    elif category == 'violence':
+                        decision_input['violence_score'] = 0.8
+                    elif category == 'drugs':
+                        decision_input['drugs_score'] = 0.8
+                    elif category == 'sexual':
+                        decision_input['sexual_score'] = 0.8
+                    elif category == 'threats':
+                        decision_input['threats_score'] = 0.8
+                    elif category == 'toxicity':
+                        decision_input['toxicity_score'] = 0.8
+
+            logger.info(f"📊 Final decision input: { {k: f'{v:.2f}' if isinstance(v, float) else v for k, v in decision_input.items()} }")
+
+            decision = self.decision_engine.make_decision(decision_input)
+
+            # Build explanation
             explanation = self.explanation_builder.build_explanation(decision, results)
 
             # ── Metrics recording (non-blocking) ──
@@ -251,10 +526,11 @@ class ModerationService:
             )
             
             logger.info(
-                f"Moderation complete: post={post_id}, "
+                f"✅ Moderation complete: post={post_id}, "
                 f"allowed={decision['allowed']}, "
                 f"reasons={decision.get('reasons', [])}"
             )
+            
             return {
                 "post_id": post_id,
                 "allowed": decision["allowed"],
@@ -262,15 +538,19 @@ class ModerationService:
             }
 
         except Exception as e:
-            logger.error(f"Error in moderation pipeline: {e}", exc_info=True)
+            logger.error(f"❌ Error in moderation pipeline: {e}", exc_info=True)
             
             # FAIL-CLOSED: reject on error (do NOT auto-approve)
-            post_repository.update_moderation_result(
-                post_id=post_id,
-                allowed=False,
-                reasons=["System error: post rejected for safety review"],
-                flagged_phrases=[],
-            )
+            try:
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=False,
+                    reasons=["System error: post rejected for safety review"],
+                    flagged_phrases=[],
+                )
+            except:
+                pass
+                
             return {
                 "post_id": post_id,
                 "allowed": False,
