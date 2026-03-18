@@ -37,7 +37,7 @@ async def save_upload_file(upload_file: UploadFile) -> str:
 @router.post("/", response_model=PostResponse)
 async def create_post(
     background_tasks: BackgroundTasks,
-    text: str = Form(...),
+    text: str = Form(""),
     image: Optional[UploadFile] = File(None)
 ):
     """Create a new post with moderation"""

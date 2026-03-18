@@ -59,3 +59,13 @@ async def get_system_health() -> Dict[str, Any]:
         logger.error(f"Error fetching system health: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch system health")
 
+
+@router.get("/advanced")
+async def get_advanced_metrics(hours: int = 24) -> Dict[str, Any]:
+    """Get comprehensive advanced metrics for the dashboard."""
+    try:
+        return metrics_repository.get_advanced_metrics(hours=hours)
+    except Exception as e:
+        logger.error(f"Error fetching advanced metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch advanced metrics")
+
