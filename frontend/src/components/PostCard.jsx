@@ -10,7 +10,9 @@ export default function PostCard({ post }) {
     <motion.div 
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
-      className={`rounded-2xl p-4 sm:p-5 mb-4 transition-colors cursor-pointer group ${
+      whileHover={{ y: -4, scale: 1.01 }}
+      transition={{ type: "spring", stiffness: 400, damping: 17 }}
+      className={`rounded-2xl p-4 sm:p-5 mb-4 transition-all cursor-pointer group shadow-sm hover:shadow-md ${
         isPending
           ? "glass-panel border border-amber-200 hover:bg-amber-50/60"
           : isAllowed 
