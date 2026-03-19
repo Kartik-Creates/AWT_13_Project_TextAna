@@ -5,15 +5,14 @@ from datetime import datetime
 import os
 from functools import partial
 
-from app.services.rule_engine import RuleEngine
-from app.services.text_processor import TextProcessor
-from app.services.decision_engine import DecisionEngine
-from app.services.explanation_builder import ExplanationBuilder
-from app.services.url_extractor import url_extractor
-from app.ml.roberta_model import roberta_analyzer
-from app.ml.clip_model import clip_analyzer
-from app.ml.nsfw_model import nsfw_detector
-from app.db.mongodb import post_repository
+from backend.app.services.rule_engine import RuleEngine
+from backend.app.services.text_processor import TextProcessor
+from backend.app.services.decision_engine import DecisionEngine
+from backend.app.services.explanation_builder import ExplanationBuilder
+from backend.app.services.url_extractor import url_extractor
+from backend.app.ml.clip_model import clip_analyzer
+from backend.app.ml.nsfw_model import nsfw_detector
+from backend.app.db.mongodb import post_repository
 
 logger = logging.getLogger(__name__)
 

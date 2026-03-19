@@ -2,7 +2,7 @@ import re
 from typing import List, Dict, Any, Set
 import logging
 
-from app.ml.text_normalizer import text_normalizer
+from backend.app.ml.text_normalizer import text_normalizer
 
 logger = logging.getLogger(__name__)
 
