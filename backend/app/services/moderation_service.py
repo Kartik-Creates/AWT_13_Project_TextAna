@@ -5,14 +5,14 @@ from datetime import datetime
 import os
 from functools import partial
 
-from backend.app.services.rule_engine import RuleEngine
-from backend.app.services.text_processor import TextProcessor
-from backend.app.services.decision_engine import DecisionEngine
-from backend.app.services.explanation_builder import ExplanationBuilder
-from backend.app.services.url_extractor import url_extractor
-from backend.app.ml.clip_model import clip_analyzer
-from backend.app.ml.nsfw_model import nsfw_detector
-from backend.app.db.mongodb import post_repository
+from app.services.rule_engine import RuleEngine
+from app.services.text_processor import TextProcessor
+from app.services.decision_engine import DecisionEngine
+from app.services.explanation_builder import ExplanationBuilder
+from app.services.url_extractor import url_extractor
+from app.ml.clip_model import clip_analyzer
+from app.ml.efficientnet_model import efficientnet_nsfw as nsfw_detector
+from app.db.mongodb import post_repository
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +354,8 @@ class ModerationService:
                     'violence_score': 0.0,
                     'drugs_score': 0.0,
                     'threats_score': 0.0,
-                    'is_harmful': True
+                    'is_harmful': True,
+                    'nsfw_score': 0.0
                 }
                 
                 decision = self.decision_engine.make_decision(decision_input)
@@ -411,6 +412,7 @@ class ModerationService:
             }
             
             # ── Steps 3 & 4: Image analysis (if image provided) ──
+            nsfw_score = 0.0  # Default value
             if image_path:
                 clean_path = image_path.lstrip('/')
                 full_image_path = os.path.normpath(clean_path)
@@ -426,9 +428,11 @@ class ModerationService:
                             f"is_nsfw={nsfw_results.get('is_nsfw')}"
                         )
                         results["image_analysis"] = nsfw_results
+                        nsfw_score = nsfw_results.get('nsfw_probability', 0)
                     except Exception as e:
                         logger.error(f"NSFW analysis failed: {e}")
                         # Fail-closed: treat NSFW failure as suspicious
+                        nsfw_score = 0.6
                         results["image_analysis"] = {
                             "nsfw_probability": 0.6,
                             "is_nsfw": False,
@@ -469,11 +473,12 @@ class ModerationService:
                 'threats': 'threats_score'
             }
 
-            # Build decision input with proper mapping
+            # Build decision input with proper mapping - INCLUDING NSFW SCORE
             decision_input = {
                 'rule_score': rule_results.get('rule_score', 1.0),
                 'has_suspicious_urls': len(suspicious_urls) > 0,
-                'is_harmful': text_results.get('is_harmful', False)
+                'is_harmful': text_results.get('is_harmful', False),
+                'nsfw_score': nsfw_score  # ADD THIS
             }
 
             # Add mapped scores

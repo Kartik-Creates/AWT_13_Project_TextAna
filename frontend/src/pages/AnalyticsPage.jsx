@@ -5,6 +5,7 @@ import {
   PieChart as RePieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
+import postService from "../services/postService";
 
 const COLORS = {
   allowed: "#10b981", // Green
@@ -67,9 +68,8 @@ export default function AnalyticsPage() {
   useEffect(() => {
     const fetchAllPosts = async () => {
       try {
-        const response = await fetch("/api/posts/");
-        if (response.ok) {
-          const data = await response.json();
+        const data = await postService.getFeed(1, 500);
+        if (Array.isArray(data)) {
           setAllPosts(data);
         }
       } catch (err) {

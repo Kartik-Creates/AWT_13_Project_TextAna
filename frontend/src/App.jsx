@@ -1,72 +1,34 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Sidebar from "./components/Sidebar";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import FeedPage from "./pages/FeedPage";
 import CreatePost from "./components/CreatePost";
 import Loader from "./components/Loader";
 import MetricsDashboardPage from "./pages/MetricsDashboardPage";
+import usePosts from "./hooks/usePosts";
 
 function App() {
   const [activeTab, setActiveTab] = useState("feed");
-  const [posts, setPosts] = useState([]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    const fetchPosts = async () => {
-      try {
-        const response = await fetch("/api/posts/");
-        if (response.ok) {
-          const data = await response.json();
-          // Assuming the backend returns an array of objects
-          if (Array.isArray(data)) {
-            // Reverse to show newest at top assuming Mongo returns chronological
-            setPosts(data);
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching initial posts:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    
-    fetchPosts();
-  }, []);
+  // Centralised post state via custom hook
+  const {
+    posts,
+    setPosts,
+    loading: isLoading,
+    isSubmitting,
+    createPost,
+    loadMore,
+    loadingMore,
+    hasMore,
+  } = usePosts();
 
   const handleCreatePost = async ({ text, image }) => {
-    setIsSubmitting(true);
-    
     try {
-      const formData = new FormData();
-      if (text) formData.append("text", text);
-      if (image) formData.append("image", image);
-
-      const response = await fetch("/api/posts/", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to moderate post");
-      }
-
-      const result = await response.json();
-      
-      // Use the real backend id
-      if (!result.id) {
-        result.id = Date.now().toString();
-      }
-      
-      // Switch to feed and prepend newly analyzed post
+      await createPost({ text, image });
+      // Switch to feed after successful creation
       setActiveTab("feed");
-      setPosts(prev => [result, ...prev]);
-
     } catch (error) {
-      console.error("Error submitting post:", error);
       alert("Failed to process content. Make sure backend is running.");
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -90,7 +52,16 @@ function App() {
           </div>
         )}
 
-        {activeTab === "feed" && <FeedPage posts={posts} setPosts={setPosts} isLoading={isLoading} />}
+        {activeTab === "feed" && (
+          <FeedPage
+            posts={posts}
+            setPosts={setPosts}
+            isLoading={isLoading}
+            loadMore={loadMore}
+            loadingMore={loadingMore}
+            hasMore={hasMore}
+          />
+        )}
         
         {/* Global Loading Overlay triggered from Create Tab */}
         {isSubmitting && activeTab === 'create' && <Loader />}

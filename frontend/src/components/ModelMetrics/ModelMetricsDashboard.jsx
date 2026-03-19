@@ -20,6 +20,8 @@ import EdgeCaseDetector from "./EdgeCaseDetector";
 import TopTriggerKeywords from "./TopTriggerKeywords";
 import RecentCriticalFlags from "./RecentCriticalFlags";
 
+import metricsService from "../../services/metricsService";
+
 const POLL_INTERVAL_MS = 30000;
 
 export default function ModelMetricsDashboard() {
@@ -36,20 +38,20 @@ export default function ModelMetricsDashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [modelsRes, catRes, recentRes, healthRes, advancedRes] =
+      const [models, categories, recent, health, advanced] =
         await Promise.all([
-          fetch("/api/metrics/models"),
-          fetch("/api/metrics/category-breakdown"),
-          fetch("/api/metrics/recent-predictions?limit=10"),
-          fetch("/api/metrics/system-health"),
-          fetch(`/api/metrics/advanced?hours=${Math.ceil(timeRange)}`),
+          metricsService.getModelMetrics().catch(() => null),
+          metricsService.getCategoryBreakdown().catch(() => null),
+          metricsService.getRecentPredictions(10).catch(() => []),
+          metricsService.getSystemHealth().catch(() => null),
+          metricsService.getAdvancedMetrics(timeRange).catch(() => null),
         ]);
 
-      if (modelsRes.ok) setModelMetrics(await modelsRes.json());
-      if (catRes.ok) setCategoryBreakdown(await catRes.json());
-      if (recentRes.ok) setRecentPredictions(await recentRes.json());
-      if (healthRes.ok) setSystemHealth(await healthRes.json());
-      if (advancedRes.ok) setAdvancedMetrics(await advancedRes.json());
+      if (models) setModelMetrics(models);
+      if (categories) setCategoryBreakdown(categories);
+      setRecentPredictions(Array.isArray(recent) ? recent : []);
+      if (health) setSystemHealth(health);
+      if (advanced) setAdvancedMetrics(advanced);
     } catch (err) {
       console.error("Failed to load metrics dashboard data", err);
     } finally {

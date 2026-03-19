@@ -21,8 +21,15 @@ class DecisionEngine:
             'threats': 0.7,
         }
         
+        # NSFW threshold
+        self.nsfw_threshold = 0.6
+        
+        # Rule score threshold
+        self.rule_threshold = 0.6
+        
         logger.info(f"✅ Decision Engine initialized with thresholds: {self.block_thresholds}")
-        logger.info("ℹ️ Rule score interpretation: HIGH score (>0.5) means violations detected")
+        logger.info(f"✅ NSFW threshold: {self.nsfw_threshold}")
+        logger.info(f"✅ Rule score threshold: {self.rule_threshold}")
     
     def make_decision(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -37,6 +44,7 @@ class DecisionEngine:
                 - violence_score: violence (0-1)
                 - drugs_score: drugs (0-1)
                 - threats_score: threats (0-1)
+                - nsfw_score: NSFW probability from image (0-1)
                 - rule_score: rule-based score (0-1) - HIGHER means more violations!
                 - has_suspicious_urls: bool
                 - is_harmful: bool from model
@@ -44,10 +52,10 @@ class DecisionEngine:
         
         reasons = []
         
-        # ── STEP 1: Check rule-based signals (fastest, most reliable) ──
+        # ── STEP 1: Check rule-based signals ──
         rule_score = inputs.get('rule_score', 0)
-        if rule_score > 0.5:
-            logger.warning(f"❌ BLOCKING due to rule engine: score={rule_score:.2f} > 0.5")
+        if rule_score > self.rule_threshold:
+            logger.warning(f"❌ BLOCKING due to rule engine: score={rule_score:.2f} > {self.rule_threshold}")
             return {
                 "allowed": False,
                 "reasons": ["rules"],
@@ -69,7 +77,20 @@ class DecisionEngine:
                 "score": 0.8
             }
         
-        # ── STEP 2: Special rule for tech content (only if rules didn't block) ──
+        # ── STEP 2: Check NSFW from images (if available) ──
+        nsfw_score = inputs.get('nsfw_score', 0)
+        if nsfw_score > self.nsfw_threshold:
+            logger.warning(f"❌ BLOCKING due to NSFW image: {nsfw_score:.2f} > {self.nsfw_threshold}")
+            return {
+                "allowed": False,
+                "reasons": ["nsfw_image"],
+                "confidence": nsfw_score,
+                "primary_category": "nsfw",
+                "severity": "high",
+                "score": nsfw_score
+            }
+        
+        # ── STEP 3: Special rule for tech content ──
         text_score = inputs.get('text_score', 0)
         if text_score > 0.6:
             harmful_scores = [
@@ -93,7 +114,7 @@ class DecisionEngine:
                     "score": text_score
                 }
         
-        # ── STEP 3: Check each ML category against its threshold ──
+        # ── STEP 4: Check each ML category against its threshold ──
         for category, threshold in self.block_thresholds.items():
             score_key = f"{category}_score"
             score = inputs.get(score_key, 0)
@@ -109,7 +130,7 @@ class DecisionEngine:
                     "score": score
                 }
         
-        # ── STEP 4: If nothing triggered, check if model says it's harmful ──
+        # ── STEP 5: If nothing triggered, check if model says it's harmful ──
         if inputs.get('is_harmful', False):
             logger.warning(f"⚠️ Model indicates harmful but no threshold exceeded - safe block")
             return {
@@ -121,7 +142,7 @@ class DecisionEngine:
                 "score": 0.6
             }
         
-        # ── STEP 5: Default: allow if nothing triggered ──
+        # ── STEP 6: Default: allow if nothing triggered ──
         logger.info(f"✅ ALLOWING content: no violations detected")
         return {
             "allowed": True,

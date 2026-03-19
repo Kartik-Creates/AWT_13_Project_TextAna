@@ -2,7 +2,7 @@ import re
 from typing import List, Dict, Any, Set
 import logging
 
-from backend.app.ml.text_normalizer import text_normalizer
+from app.ml.text_normalizer import text_normalizer
 
 logger = logging.getLogger(__name__)
 
@@ -328,29 +328,38 @@ class RuleEngine:
                 results["violations"].append(f"hindi_abuse:{word}")
             results["hindi_detection"] = hindi_check
         
-        # ── FIXED Score calculation ──
+        # ── MORE LENIENT Score calculation ──
         unique_violations = len(set(results["violations"]))
         
-        # Base score - each violation adds more weight
+        # More nuanced scoring - not every violation should block
         if unique_violations == 0:
             results["rule_score"] = 0.0
         elif unique_violations == 1:
-            results["rule_score"] = 0.6  # Single violation should block!
+            # Check what kind of violation it is
+            if any(cat in ["violence", "harm", "sexual"] for cat in results["keyword_categories"]):
+                results["rule_score"] = 0.5  # Serious violations get medium score
+            elif "hindi_abuse" in results["keyword_categories"]:
+                results["rule_score"] = 0.4  # Hindi abuse is serious but maybe not always
+            else:
+                results["rule_score"] = 0.2  # Minor violations (spam, promotional) get low score
         elif unique_violations == 2:
-            results["rule_score"] = 0.8
+            if any(cat in ["violence", "harm", "sexual"] for cat in results["keyword_categories"]):
+                results["rule_score"] = 0.7
+            else:
+                results["rule_score"] = 0.4
         else:
-            results["rule_score"] = 1.0
+            results["rule_score"] = 0.8  # Multiple violations
         
         # Apply severity multiplier for dangerous categories
         severity_multiplier = 1.0
         if "violence" in results["keyword_categories"]:
-            severity_multiplier = 1.3
+            severity_multiplier = 1.2
         if "harm" in results["keyword_categories"]:
-            severity_multiplier = 1.3
+            severity_multiplier = 1.2
         if "sexual" in results["keyword_categories"]:
-            severity_multiplier = 1.2
+            severity_multiplier = 1.1
         if "hindi_abuse" in results["keyword_categories"]:
-            severity_multiplier = 1.2
+            severity_multiplier = 1.1
         
         results["rule_score"] = min(results["rule_score"] * severity_multiplier, 1.0)
         
