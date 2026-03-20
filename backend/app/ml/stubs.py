@@ -11,8 +11,6 @@ import logging
 from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
-
-
 # ── Label names matching unitary/multilingual-toxic-xlm-roberta ──
 TOXICITY_LABELS = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
 
@@ -33,7 +31,8 @@ class StubRobertaAnalyzer:
     """Keyword-based text analysis fallback (no torch required).
     
     Returns the same interface as the real RobertaAnalyzer (XLM-RoBERTa).
-    """
+    """
+
 
     def __init__(self):
         logger.warning(
