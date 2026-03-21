@@ -22,6 +22,15 @@ class ExplanationBuilder:
             "drugs": "Drug-related content detected",
             "threats": "Threatening content detected",
             
+            # URL categories
+            "high_risk_url": "High-risk URL detected",
+            "scam_url_pattern": "Scam or phishing URL detected",
+            "shortened_url": "Suspicious shortened URL detected",
+            "tech_content_with_suspicious_url": "Technology content with suspicious URL",
+            
+            # NEW: Non-tech content reason
+            "non_tech_content": "Content is not related to technology. Only technology-related posts are allowed on this platform.",
+            
             # Safe categories
             "tech_content": "✅ Technology content approved",
             "safe": "✅ No issues detected",
