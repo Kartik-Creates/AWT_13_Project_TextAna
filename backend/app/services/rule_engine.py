@@ -319,14 +319,17 @@ class RuleEngine:
                 results["violations"].append("spam")
         
         # ── Step 5: Check Hindi/Hinglish abuse via normalizer ──
-        hindi_check = text_normalizer.detect_hindi_abuse(text_stripped)
-        if hindi_check["has_hindi_abuse"]:
-            for word in hindi_check["matched_words"]:
-                results["banned_keywords"].append(word)
-                if "hindi_abuse" not in results["keyword_categories"]:
-                    results["keyword_categories"].append("hindi_abuse")
-                results["violations"].append(f"hindi_abuse:{word}")
-            results["hindi_detection"] = hindi_check
+        try:
+            hindi_check = text_normalizer.detect_hindi_abuse(text_stripped)
+            if hindi_check["has_hindi_abuse"]:
+                for word in hindi_check["matched_words"]:
+                    results["banned_keywords"].append(word)
+                    if "hindi_abuse" not in results["keyword_categories"]:
+                        results["keyword_categories"].append("hindi_abuse")
+                    results["violations"].append(f"hindi_abuse:{word}")
+                results["hindi_detection"] = hindi_check
+        except Exception as e:
+            logger.error(f"Error in Hindi abuse detection: {e}")
         
         # ── MORE LENIENT Score calculation ──
         unique_violations = len(set(results["violations"]))
@@ -368,3 +371,6 @@ class RuleEngine:
             logger.info(f"📊 Rule score: {results['rule_score']:.2f} (violations={unique_violations}, categories={results['keyword_categories']})")
         
         return results
+
+# Global instance
+rule_engine = RuleEngine()
