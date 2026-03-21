@@ -1,42 +1,61 @@
 """
 Multi-Model Ensemble for Complete Moderation
-Using only models that actually exist on HuggingFace
+Using models from model_loader
 """
 
 import torch
 import logging
-from transformers import pipeline
-from typing import Dict, List
+from typing import Dict, List, Optional
 import re
+
+# Import your model loader
+from app.ml.model_loader import model_loader
 
 logger = logging.getLogger(__name__)
 
 class EnsembleModerator:
     """Combines multiple specialized models for complete coverage"""
     
-    def __init__(self, device):
-        self.device = device
+    def __init__(self, device=None):
+        if device is None:
+            self.device = model_loader.device
+        else:
+            self.device = device
         
-        # Model 1: Toxicity (English) - THIS WORKS
-        logger.info("🔄 Loading toxicity model (unitary/toxic-bert)...")
-        self.toxicity_model = pipeline(
-            "text-classification",
-            model="unitary/toxic-bert",
-            device=0 if device.type == 'cuda' else -1,
-            top_k=None
-        )
+        logger.info(f"EnsembleModerator initializing on device: {self.device}")
         
-        # Model 2: Hate speech - THIS WORKS
-        logger.info("🔄 Loading hate speech model...")
-        self.hate_model = pipeline(
-            "text-classification",
-            model="Hate-speech-CNERG/dehatebert-mono-english",
-            device=0 if device.type == 'cuda' else -1
-        )
+        # Load toxicity model from model_loader
+        try:
+            logger.info("🔄 Loading toxicity model from model_loader...")
+            self.toxicity_model, self.toxicity_tokenizer = model_loader.load_roberta()
+            logger.info("✅ Toxicity model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load toxicity model: {e}")
+            self.toxicity_model = None
+            self.toxicity_tokenizer = None
         
-        logger.info("✅ Base models loaded. Using keyword detection for other categories.")
+        # Load hate speech model
+        try:
+            logger.info("🔄 Loading hate speech model...")
+            from transformers import pipeline
+            self.hate_model = pipeline(
+                "text-classification",
+                model="Hate-speech-CNERG/dehatebert-mono-english",
+                device=0 if self.device.type == 'cuda' else -1
+            )
+            logger.info("✅ Hate speech model loaded")
+        except Exception as e:
+            logger.error(f"Failed to load hate speech model: {e}")
+            self.hate_model = None
         
         # Keyword lists for categories without models
+        self._init_keyword_lists()
+        
+        logger.info("✅ EnsembleModerator ready")
+    
+    def _init_keyword_lists(self):
+        """Initialize keyword lists for detection"""
+        
         self.sexual_keywords = [
             # English sexual content
             'slide in', 'raw', 'bed tonight', 'warm that bed', 'mouth do tricks',
@@ -44,7 +63,7 @@ class EnsembleModerator:
             'recording every second', 'location dropped', 'hidden folder',
             'nudes', 'pics', 'forced', 'creampie', 'slut', 'whore',
             'c*ck', 'd*ck', 'pussy', 'tits', 'consent', 'unconscious',
-            # Hindi sexual content (added with proper commas)
+            # Hindi sexual content
             'bahan ka lund', 'maa ka lund', 'behen ki chut', 'maa ki chut',
             'teri maa', 'teri behan', 'bahan ka', 'chut', 'lund', 'randi',
             'madarchod', 'behenchod', 'bhenchod', 'chutiya', 'gandu',
@@ -103,102 +122,153 @@ class EnsembleModerator:
             'git', 'github', 'ci/cd', 'jenkins', 'terraform'
         ]
     
-    def analyze(self, text: str) -> Dict:
-        """Analyze text using all available models and keywords"""
-        text_lower = text.lower()
+    def _analyze_toxicity(self, text: str) -> Dict[str, float]:
+        """Analyze toxicity using the loaded model"""
+        scores = {'toxicity': 0.0, 'sexual': 0.0, 'threats': 0.0}
         
-        # Initialize scores
+        if self.toxicity_model is None:
+            return scores
+        
+        try:
+            from transformers import pipeline
+            # Create pipeline from loaded model
+            toxicity_pipeline = pipeline(
+                "text-classification",
+                model=self.toxicity_model,
+                tokenizer=self.toxicity_tokenizer,
+                device=0 if self.device.type == 'cuda' else -1,
+                top_k=None
+            )
+            
+            results = toxicity_pipeline(text)[0]
+            
+            for r in results:
+                label = r['label'].lower()
+                score = r['score']
+                if label == 'toxic' and score > 0.5:
+                    scores['toxicity'] = max(scores['toxicity'], score)
+                elif label == 'threat' and score > 0.5:
+                    scores['threats'] = max(scores['threats'], score)
+                elif label == 'obscene' and score > 0.5:
+                    scores['sexual'] = max(scores['sexual'], score)
+                elif label == 'insult' and score > 0.5:
+                    scores['toxicity'] = max(scores['toxicity'], score)
+        except Exception as e:
+            logger.error(f"Toxicity analysis failed: {e}")
+        
+        return scores
+    
+    def _analyze_hate(self, text: str) -> float:
+        """Analyze hate speech"""
+        if self.hate_model is None:
+            return 0.0
+        
+        try:
+            result = self.hate_model(text)[0]
+            if result['label'] == 'HATE':
+                return result['score']
+        except Exception as e:
+            logger.error(f"Hate analysis failed: {e}")
+        
+        return 0.0
+    
+    def _keyword_detection(self, text: str) -> Dict[str, float]:
+        """Detect harmful content using keywords"""
+        text_lower = text.lower()
         scores = {
-            'toxicity': 0.0,
             'sexual': 0.0,
             'self_harm': 0.0,
             'violence': 0.0,
             'drugs': 0.0,
-            'threats': 0.0,
-            'tech_relevance': 0.0
+            'threats': 0.0
         }
         
-        flagged = []
-        
-        # 1. Toxicity model (works)
-        try:
-            tox_results = self.toxicity_model(text)[0]
-            for r in tox_results:
-                if r['label'] == 'toxic' and r['score'] > 0.5:
-                    scores['toxicity'] = max(scores['toxicity'], r['score'])
-                elif r['label'] == 'threat' and r['score'] > 0.5:
-                    scores['threats'] = max(scores['threats'], r['score'])
-                elif r['label'] == 'obscene' and r['score'] > 0.5:
-                    scores['sexual'] = max(scores['sexual'], r['score'])
-                elif r['label'] == 'insult' and r['score'] > 0.5:
-                    scores['toxicity'] = max(scores['toxicity'], r['score'])
-            
-            if scores['toxicity'] > 0.7:
-                flagged.append('toxicity')
-            if scores['threats'] > 0.6:
-                flagged.append('threats')
-        except Exception as e:
-            logger.error(f"Toxicity model failed: {e}")
-        
-        # 2. Hate speech model (works)
-        try:
-            hate_result = self.hate_model(text)[0]
-            if hate_result['label'] == 'HATE' and hate_result['score'] > 0.6:
-                scores['toxicity'] = max(scores['toxicity'], hate_result['score'])
-                if 'toxicity' not in flagged:
-                    flagged.append('toxicity')
-        except Exception as e:
-            logger.error(f"Hate model failed: {e}")
-        
-        # 3. Keyword-based sexual detection
+        # Sexual keywords
         for keyword in self.sexual_keywords:
             if keyword in text_lower:
                 scores['sexual'] = 0.9
-                flagged.append('sexual')
                 break
         
-        # 4. Blackmail detection (new)
+        # Blackmail (threats)
         for keyword in self.blackmail_keywords:
             if keyword in text_lower:
-                scores['threats'] = max(scores['threats'], 0.9)
-                flagged.append('threats')
+                scores['threats'] = 0.9
                 break
         
-        # 5. Keyword-based self-harm detection
+        # Self-harm
         for keyword in self.self_harm_keywords:
             if keyword in text_lower:
                 scores['self_harm'] = 0.9
-                flagged.append('self_harm')
                 break
         
-        # 6. Keyword-based drug detection
+        # Drugs
         for keyword in self.drug_keywords:
             if keyword in text_lower:
                 scores['drugs'] = 0.9
-                flagged.append('drugs')
                 break
         
-        # 7. Keyword-based violence detection
+        # Violence
         for keyword in self.violence_keywords:
             if keyword in text_lower:
                 scores['violence'] = 0.9
-                flagged.append('violence')
                 break
         
-        # 8. Tech relevance (positive signal)
+        # Threats
+        for keyword in self.threat_keywords:
+            if keyword in text_lower:
+                scores['threats'] = max(scores['threats'], 0.9)
+                break
+        
+        return scores
+    
+    def _tech_relevance(self, text: str) -> float:
+        """Calculate tech relevance score"""
+        text_lower = text.lower()
         tech_matches = 0
         for keyword in self.tech_keywords:
             if keyword in text_lower:
                 tech_matches += 1
         
-        if tech_matches > 0:
-            # Calculate relevance based on density
-            word_count = len(text_lower.split())
-            if word_count > 0:
-                tech_relevance = min(tech_matches / (word_count * 0.2), 1.0)
-                scores['tech_relevance'] = round(tech_relevance, 4)
+        if tech_matches == 0:
+            return 0.0
         
-        # Remove duplicates from flagged
+        word_count = len(text_lower.split())
+        if word_count > 0:
+            # More lenient tech relevance scoring
+            relevance = min(tech_matches / max(word_count * 0.15, 1), 0.9)
+            return relevance
+        return 0.0
+    
+    def analyze(self, text: str) -> Dict:
+        """Analyze text using all available models"""
+        
+        # Get scores from all sources
+        tox_scores = self._analyze_toxicity(text)
+        hate_score = self._analyze_hate(text)
+        keyword_scores = self._keyword_detection(text)
+        tech_score = self._tech_relevance(text)
+        
+        # Combine scores
+        scores = {
+            'toxicity': max(tox_scores['toxicity'], hate_score),
+            'sexual': max(tox_scores['sexual'], keyword_scores['sexual']),
+            'self_harm': keyword_scores['self_harm'],
+            'violence': keyword_scores['violence'],
+            'drugs': keyword_scores['drugs'],
+            'threats': max(tox_scores['threats'], keyword_scores['threats']),
+            'tech_relevance': tech_score
+        }
+        
+        # Determine flagged categories
+        flagged = []
+        for category in ['sexual', 'self_harm', 'violence', 'drugs', 'threats']:
+            if scores[category] > 0.5:
+                flagged.append(category)
+        
+        if scores['toxicity'] > 0.7:
+            flagged.append('toxicity')
+        
+        # Remove duplicates
         flagged = list(set(flagged))
         
         # Calculate max harm score
@@ -207,8 +277,7 @@ class EnsembleModerator:
         
         # Determine primary category
         if flagged:
-            # Find which flagged category has highest score
-            category_scores = {cat: scores[cat] for cat in flagged}
+            category_scores = {cat: scores.get(cat, 0) for cat in flagged}
             primary = max(category_scores, key=category_scores.get)
         else:
             primary = "safe"
@@ -218,22 +287,14 @@ class EnsembleModerator:
             'flagged_categories': flagged,
             'is_harmful': len(flagged) > 0,
             'max_harm_score': max_harm,
-            'is_tech_relevant': scores['tech_relevance'] > 0.5,
+            'is_tech_relevant': tech_score > 0.5,
             'primary_category': primary,
-            'processing_time_ms': 150
+            'processing_time_ms': 100  # Approximate
         }
-    
-    def analyze_batch(self, texts: List[str], batch_size: int = 8) -> List[Dict]:
-        """Batch analyze multiple texts"""
-        results = []
-        for text in texts:
-            results.append(self.analyze(text))
-        return results
 
 
-# Fallback model for when everything fails
 class FallbackModerator:
-    """Simple keyword-based fallback"""
+    """Simple keyword-based fallback when models fail"""
     
     def __init__(self):
         logger.info("Initializing FallbackModerator")
@@ -278,55 +339,17 @@ class FallbackModerator:
 
 # Singleton
 _model = None
-_fallback = FallbackModerator()
 
 def get_multitask_moderator(device=None):
     """Get or create the singleton instance"""
     global _model
     if _model is None:
         try:
-            if device is None:
-                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             logger.info("🔄 Creating EnsembleModerator instance...")
             _model = EnsembleModerator(device)
             logger.info("✅ EnsembleModerator ready")
         except Exception as e:
             logger.error(f"Failed to create EnsembleModerator: {e}")
             logger.info("⚠️ Using FallbackModerator instead")
-            _model = _fallback
+            _model = FallbackModerator()
     return _model
-
-
-# Test the model
-if __name__ == "__main__":
-    print("="*60)
-    print("TESTING MODERATION ENSEMBLE")
-    print("="*60)
-    
-    model = get_multitask_moderator(torch.device('cpu'))
-    
-    test_texts = [
-        "I love programming in Python",
-        "you need someone to warm that bed tonight",
-        "I can't take this pain anymore, want to end it all",
-        "Need some strong pain relief, hmu",
-        "you're such an idiot",
-        "bhai tu meri randi ban ja",
-        "teri bahan ka lund, tere ko khatham kar dunga",
-        "found your old photos, send more or I share"
-    ]
-    
-    for text in test_texts:
-        print(f"\n📝 Text: {text}")
-        result = model.analyze(text)
-        
-        for category, score in result['scores'].items():
-            if score > 0.5:
-                marker = "🔴"
-            elif score > 0.3:
-                marker = "🟡"
-            else:
-                marker = "⚪"
-            print(f"  {marker} {category:12}: {score:.4f}")
-        
-        print(f"  Decision: {'❌ BLOCK' if result['is_harmful'] else '✅ ALLOW'}")
