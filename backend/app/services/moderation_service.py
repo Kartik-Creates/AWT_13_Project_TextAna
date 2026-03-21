@@ -1,3 +1,8 @@
+"""
+Moderation Service - Orchestrates the entire moderation pipeline
+with full URL extractor integration
+"""
+
 from typing import Optional, Dict, Any, List
 import asyncio
 import logging
@@ -180,12 +185,13 @@ class ModerationService:
     """Orchestrates the entire moderation pipeline.
     
     Pipeline:
-      1. Rule-based keyword / URL / spam checks
-      2. ML text toxicity (XLM-RoBERTa or MultiTask model)
-      3. NSFW image detection (Falconsai/nsfw_image_detection)
-      4. Image-text relevance (CLIP)
-      5. Decision engine combines all signals
-      6. Explanation builder generates human-readable output
+      1. URL extraction and analysis
+      2. Rule-based keyword / URL / spam checks
+      3. ML text toxicity (XLM-RoBERTa or MultiTask model)
+      4. NSFW image detection (Falconsai/nsfw_image_detection)
+      5. Image-text relevance (CLIP)
+      6. Decision engine combines all signals
+      7. Explanation builder generates human-readable output
       
     Error policy: FAIL-CLOSED — if any stage crashes, the post is rejected
     rather than auto-approved, matching security best practices.
@@ -196,7 +202,7 @@ class ModerationService:
         self.text_processor = TextProcessor()
         self.decision_engine = DecisionEngine()
         self.explanation_builder = ExplanationBuilder()
-        logger.info("✅ Moderation service initialized")
+        logger.info("✅ Moderation service initialized with URL extractor integration")
 
     async def _run_sync(self, func, *args):
         """Helper to run blocking ML calls in a thread pool."""
@@ -290,6 +296,31 @@ class ModerationService:
                     "post_id": post_id,
                 }
                 metrics_repository.insert_prediction(doc)
+                
+            # URL metrics
+            url_res = results.get("url_analysis") or {}
+            if url_res and url_res.get("total_urls", 0) > 0:
+                doc = {
+                    "timestamp": timestamp,
+                    "model": "url_extractor",
+                    "input_type": "urls",
+                    "input_preview": text[:200],
+                    "prediction": {
+                        "total_urls": url_res.get("total_urls", 0),
+                        "suspicious_urls": url_res.get("suspicious_urls", 0),
+                        "high_risk_urls": url_res.get("high_risk_urls", 0),
+                        "medium_risk_urls": url_res.get("medium_risk_urls", 0),
+                        "max_risk_score": url_res.get("max_risk_score", 0),
+                    },
+                    "confidence": float(url_res.get("max_risk_score", 0)),
+                    "response_time_ms": url_res.get("processing_time_ms", 0),
+                    "language": None,
+                    "category": "suspicious_urls" if url_res.get("has_suspicious", False) else "safe",
+                    "correct": None,
+                    "user_feedback": None,
+                    "post_id": post_id,
+                }
+                metrics_repository.insert_prediction(doc)
 
         except Exception as e:
             logger.error(f"Failed to record metrics for post {post_id}: {e}", exc_info=True)
@@ -300,11 +331,159 @@ class ModerationService:
         text: str,
         image_path: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Run full moderation pipeline on a post."""
+        """Run full moderation pipeline on a post with URL extraction integration."""
         logger.info(f"▶️ Starting moderation for post: {post_id}")
         
         try:
-            # ── Step 1: Rule-based checks (fast, no ML) ──
+            # ── STEP 1: URL Extraction and Analysis ──
+            # Extract and analyze URLs from text
+            urls = url_extractor.extract_urls(text)
+            url_summary = url_extractor.get_url_summary(urls)
+            
+
+            # 🚨 IMMEDIATE BLOCK FOR SCAM URLS 🚨
+            if url_summary.get('has_scam', False):
+                logger.error(f"🚨🚨🚨 IMMEDIATE BLOCK: Scam URL detected! 🚨🚨🚨")
+                for url in urls:
+                    if url.get('has_scam_keywords', False):
+                        logger.error(f"   Scam URL: {url['full_url']}")
+                        logger.error(f"   Keywords: {url.get('scam_keywords_found', [])}")
+                        logger.error(f"   Risk Score: {url['risk_score']:.2f} - {url['risk_level']}")
+                
+                # Immediately block without any further processing
+                results = {
+                    "rule_based": {"rule_score": 1.0, "violations": ["scam_url"]},
+                    "text_analysis": {"scores": {}, "flagged_categories": ["scam_url"]},
+                    "url_analysis": {
+                        "all_urls": urls,
+                        "suspicious_urls": urls,
+                        "has_suspicious_urls": True,
+                        "has_scam_urls": True,
+                        "total_urls": len(urls),
+                        "suspicious_urls_count": len(urls),
+                        "max_risk_score": max([u['risk_score'] for u in urls]) if urls else 0,
+                    },
+                    "image_analysis": None,
+                    "relevance_analysis": None,
+                }
+                
+                decision = {
+                    "allowed": False,
+                    "reasons": ["scam_url_detected"],
+                    "confidence": 1.0,
+                    "primary_category": "scam",
+                    "severity": "high",
+                    "score": 1.0
+                }
+                
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=False,
+                    reasons=["SCAM URL DETECTED: " + ", ".join([u['full_url'] for u in urls if u.get('has_scam_keywords')])],
+                    flagged_phrases=[u['full_url'] for u in urls if u.get('has_scam_keywords')],
+                )
+                
+                return {
+                    "post_id": post_id,
+                    "allowed": False,
+                    "results": results,
+                }
+
+            # Log URL findings
+            if url_summary['total_urls'] > 0:
+                logger.info(f"🔗 Found {url_summary['total_urls']} URL(s) in content")
+                for url in urls:
+                    logger.info(f"   URL: {url['full_url'][:80]} - Risk: {url['risk_level']} ({url['risk_score']:.2f})")
+                    if url['risk_indicators']:
+                        logger.info(f"      Indicators: {', '.join(url['risk_indicators'][:2])}")
+            
+            # Determine suspicious URLs (MEDIUM or HIGH risk)
+            suspicious_urls = [
+                u for u in urls
+                if u.get("risk_level") in ("MEDIUM", "HIGH")
+            ]
+            
+            # Determine high-risk URLs (for immediate blocking)
+            high_risk_urls = [
+                u for u in urls
+                if u.get("risk_level") == "HIGH"
+            ]
+            
+            # Prepare URL analysis results
+            url_analysis_results = {
+                "all_urls": urls,
+                "suspicious_urls": suspicious_urls,
+                "high_risk_urls": high_risk_urls,
+                "has_suspicious_urls": len(suspicious_urls) > 0,
+                "has_high_risk_urls": len(high_risk_urls) > 0,
+                "total_urls": url_summary['total_urls'],
+                "suspicious_urls_count": url_summary['suspicious_count'],
+                "max_risk_score": url_summary['max_risk_score'],
+                "risk_levels": url_summary['risk_levels'],
+                "processing_time_ms": 0
+            }
+            
+            # EARLY EXIT: If high-risk URLs found, block immediately
+            if url_analysis_results['has_high_risk_urls']:
+                logger.warning(f"🛑 EARLY BLOCK due to HIGH-RISK URLs: {len(high_risk_urls)} URL(s)")
+                for url in high_risk_urls:
+                    logger.warning(f"   High-risk URL: {url['full_url']} (score: {url['risk_score']:.2f})")
+                
+                # Create results with URL analysis
+                results = {
+                    "rule_based": {"rule_score": 0.9, "violations": ["high_risk_url"]},
+                    "text_analysis": {"scores": {}, "flagged_categories": ["urls"]},
+                    "url_analysis": url_analysis_results,
+                    "image_analysis": None,
+                    "relevance_analysis": None,
+                }
+                
+                # Create decision input with high-risk URL flag
+                decision_input = {
+                    'rule_score': 0.9,
+                    'has_suspicious_urls': True,
+                    'has_high_risk_urls': True,
+                    'url_analysis': urls,
+                    'url_summary': url_summary,
+                    'text_score': 0.0,
+                    'toxicity_score': 0.0,
+                    'sexual_score': 0.0,
+                    'self_harm_score': 0.0,
+                    'violence_score': 0.0,
+                    'drugs_score': 0.0,
+                    'threats_score': 0.0,
+                    'is_harmful': True,
+                    'nsfw_score': 0.0
+                }
+                
+                decision = self.decision_engine.make_decision(decision_input)
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                
+                # Update DB
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=decision["allowed"],
+                    reasons=explanation.get("reasons", []),
+                    flagged_phrases=explanation.get("flagged_phrases", []),
+                )
+                
+                # Record metrics
+                try:
+                    asyncio.create_task(
+                        self._record_metrics(post_id=post_id, text=text, results=results)
+                    )
+                except RuntimeError:
+                    await self._record_metrics(post_id=post_id, text=text, results=results)
+                
+                return {
+                    "post_id": post_id,
+                    "allowed": decision["allowed"],
+                    "results": results,
+                }
+            
+            # ── STEP 2: Rule-based checks (fast, no ML) ──
             rule_results = self.rule_engine.check_rules(text)
             
             # Log rule results in detail
@@ -317,16 +496,6 @@ class ModerationService:
             
             if rule_results.get('hindi_detection', {}).get('has_hindi_abuse'):
                 logger.warning(f"  - Hindi abuse: {rule_results.get('hindi_detection', {}).get('matched_words')}")
-            
-            # ── Step 1b: URL extraction ──
-            urls = url_extractor.extract_urls(text)
-            suspicious_urls = [
-                u for u in urls
-                if u.get("risk_level") in ("MEDIUM", "HIGH")
-            ]
-            
-            if suspicious_urls:
-                logger.warning(f"  - Suspicious URLs: {suspicious_urls}")
 
             # EARLY EXIT: If rule score is very high, block immediately
             if rule_results.get('rule_score', 0) > 0.8:
@@ -336,17 +505,17 @@ class ModerationService:
                 results = {
                     "rule_based": rule_results,
                     "text_analysis": {"scores": {}, "flagged_categories": []},
-                    "url_analysis": {
-                        "all_urls": urls,
-                        "suspicious_urls": suspicious_urls,
-                        "has_suspicious_urls": len(suspicious_urls) > 0,
-                    }
+                    "url_analysis": url_analysis_results,
+                    "image_analysis": None,
+                    "relevance_analysis": None,
                 }
                 
-                # Create decision input
+                # Create decision input with URL context
                 decision_input = {
                     'rule_score': rule_results.get('rule_score', 1.0),
-                    'has_suspicious_urls': len(suspicious_urls) > 0,
+                    'has_suspicious_urls': url_analysis_results['has_suspicious_urls'],
+                    'url_analysis': urls,
+                    'url_summary': url_summary,
                     'text_score': 0.0,
                     'toxicity_score': 0.0,
                     'sexual_score': 0.0,
@@ -375,7 +544,7 @@ class ModerationService:
                     "results": results,
                 }
 
-            # ── Step 2: ML text analysis ──
+            # ── STEP 3: ML text analysis ──
             try:
                 if USE_ML_MODEL:
                     # Use the advanced multi-task model
@@ -399,26 +568,23 @@ class ModerationService:
                 text_results = fallback_model.analyze(text)
                 logger.info(f"⚠️ Used fallback after ML failure")
             
+            # Combine all results
             results = {
                 "rule_based": rule_results,
                 "text_analysis": text_results,
-                "url_analysis": {
-                    "all_urls": urls,
-                    "suspicious_urls": suspicious_urls,
-                    "has_suspicious_urls": len(suspicious_urls) > 0,
-                },
+                "url_analysis": url_analysis_results,
                 "image_analysis": None,
                 "relevance_analysis": None,
             }
             
-            # ── Steps 3 & 4: Image analysis (if image provided) ──
+            # ── STEPS 4 & 5: Image analysis (if image provided) ──
             nsfw_score = 0.0  # Default value
             if image_path:
                 clean_path = image_path.lstrip('/')
                 full_image_path = os.path.normpath(clean_path)
                 
                 if os.path.exists(full_image_path):
-                    # Step 3: NSFW detection
+                    # Step 4: NSFW detection
                     try:
                         nsfw_results = await self._run_sync(
                             nsfw_detector.analyze, full_image_path
@@ -441,7 +607,7 @@ class ModerationService:
                             "using_fallback": True,
                         }
                     
-                    # Step 4: CLIP relevance
+                    # Step 5: CLIP relevance
                     try:
                         clip_results = await self._run_sync(
                             clip_analyzer.analyze, text, full_image_path
@@ -455,7 +621,7 @@ class ModerationService:
                 else:
                     logger.warning(f"⚠️ Image file not found: {full_image_path}")
             
-            # ── Step 5: Decision & Explanation ──
+            # ── STEP 6: Decision & Explanation ──
             # Extract scores for decision engine
             text_scores = text_results.get('scores', {})
             
@@ -473,12 +639,15 @@ class ModerationService:
                 'threats': 'threats_score'
             }
 
-            # Build decision input with proper mapping - INCLUDING NSFW SCORE
+            # Build decision input with ALL signals - including URL analysis
             decision_input = {
                 'rule_score': rule_results.get('rule_score', 1.0),
-                'has_suspicious_urls': len(suspicious_urls) > 0,
+                'has_suspicious_urls': url_analysis_results['has_suspicious_urls'],
+                'has_high_risk_urls': url_analysis_results['has_high_risk_urls'],
+                'url_analysis': urls,
+                'url_summary': url_summary,
                 'is_harmful': text_results.get('is_harmful', False),
-                'nsfw_score': nsfw_score  # ADD THIS
+                'nsfw_score': nsfw_score
             }
 
             # Add mapped scores
@@ -508,6 +677,19 @@ class ModerationService:
             logger.info(f"📊 Final decision input: { {k: f'{v:.2f}' if isinstance(v, float) else v for k, v in decision_input.items()} }")
 
             decision = self.decision_engine.make_decision(decision_input)
+            
+            # Add URL details to decision for explanation
+            if url_analysis_results['has_suspicious_urls']:
+                decision['url_warning'] = f"Contains {url_analysis_results['suspicious_urls_count']} suspicious URL(s)"
+                if url_analysis_results['suspicious_urls']:
+                    decision['suspicious_urls'] = [
+                        {
+                            'url': u['full_url'],
+                            'risk_level': u['risk_level'],
+                            'risk_score': u['risk_score']
+                        }
+                        for u in url_analysis_results['suspicious_urls'][:3]  # Limit to first 3
+                    ]
 
             # Build explanation
             explanation = self.explanation_builder.build_explanation(decision, results)
@@ -521,7 +703,7 @@ class ModerationService:
                 # If no running loop, just fire-and-forget synchronously
                 await self._record_metrics(post_id=post_id, text=text, results=results)
             
-            # ── Step 6: Update DB ──
+            # ── STEP 7: Update DB ──
             update_ok = post_repository.update_moderation_result(
                 post_id=post_id,
                 allowed=decision["allowed"],
@@ -535,10 +717,20 @@ class ModerationService:
                 f"reasons={decision.get('reasons', [])}"
             )
             
+            # Add URL analysis summary to response
+            if url_analysis_results['has_suspicious_urls']:
+                logger.info(f"   ⚠️ URL warning: {url_analysis_results['suspicious_urls_count']} suspicious URL(s)")
+            
             return {
                 "post_id": post_id,
                 "allowed": decision["allowed"],
                 "results": results,
+                "url_summary": {
+                    "total_urls": url_analysis_results['total_urls'],
+                    "suspicious_urls": url_analysis_results['suspicious_urls_count'],
+                    "has_suspicious": url_analysis_results['has_suspicious_urls'],
+                    "max_risk_score": url_analysis_results['max_risk_score']
+                }
             }
 
         except Exception as e:
@@ -560,3 +752,102 @@ class ModerationService:
                 "allowed": False,
                 "error": str(e),
             }
+    
+    async def moderate_batch(
+        self,
+        posts: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Moderate multiple posts in batch
+        
+        Args:
+            posts: List of dicts with keys 'post_id', 'text', optional 'image_path'
+            
+        Returns:
+            List of moderation results
+        """
+        tasks = []
+        for post in posts:
+            task = self.moderate_post(
+                post_id=post['post_id'],
+                text=post['text'],
+                image_path=post.get('image_path')
+            )
+            tasks.append(task)
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Handle exceptions
+        final_results = []
+        for result in results:
+            if isinstance(result, Exception):
+                final_results.append({
+                    "error": str(result),
+                    "allowed": False
+                })
+            else:
+                final_results.append(result)
+        
+        return final_results
+    
+    def get_moderation_stats(self, decisions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Get statistics from moderation decisions including URL stats
+        
+        Args:
+            decisions: List of moderation decision dictionaries
+            
+        Returns:
+            Statistics summary
+        """
+        total = len(decisions)
+        blocked = sum(1 for d in decisions if not d.get('allowed', True))
+        allowed = total - blocked
+        
+        # URL statistics
+        url_stats = {
+            'total_posts_with_urls': 0,
+            'total_urls_found': 0,
+            'total_suspicious_urls': 0,
+            'posts_blocked_by_urls': 0
+        }
+        
+        for decision in decisions:
+            results = decision.get('results', {})
+            url_analysis = results.get('url_analysis', {})
+            
+            if url_analysis.get('total_urls', 0) > 0:
+                url_stats['total_posts_with_urls'] += 1
+                url_stats['total_urls_found'] += url_analysis.get('total_urls', 0)
+                url_stats['total_suspicious_urls'] += url_analysis.get('suspicious_urls_count', 0)
+            
+            # Check if blocked due to URLs
+            if not decision.get('allowed', True):
+                reasons = decision.get('results', {}).get('rule_based', {}).get('violations', [])
+                if any('url' in reason.lower() for reason in reasons):
+                    url_stats['posts_blocked_by_urls'] += 1
+        
+        # Category distribution
+        categories = {}
+        for decision in decisions:
+            results = decision.get('results', {})
+            text_analysis = results.get('text_analysis', {})
+            primary_cat = text_analysis.get('primary_category', 'unknown')
+            categories[primary_cat] = categories.get(primary_cat, 0) + 1
+            
+            # Add URL category if present
+            if results.get('url_analysis', {}).get('has_suspicious_urls', False):
+                categories['suspicious_urls'] = categories.get('suspicious_urls', 0) + 1
+        
+        return {
+            'total_content': total,
+            'allowed': allowed,
+            'blocked': blocked,
+            'block_rate': blocked / total if total > 0 else 0,
+            'categories': categories,
+            'url_statistics': url_stats
+        }
+
+
+# Global instance for easy import
+moderation_service = ModerationService()
