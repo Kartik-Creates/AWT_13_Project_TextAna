@@ -12,6 +12,9 @@ from transformers import pipeline
 from typing import Dict, List, Optional, Any
 import time
 
+# Import your model loader
+from app.ml.model_loader import model_loader
+
 logger = logging.getLogger(__name__)
 
 

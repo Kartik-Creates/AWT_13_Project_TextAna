@@ -1,5 +1,5 @@
 import re
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Tuple
 import logging
 
 from app.ml.text_normalizer import text_normalizer
@@ -11,6 +11,7 @@ class RuleEngine:
 
     Uses \\b word-boundary regex to avoid false positives like
     'skill' matching 'kill' or 'studied' matching 'die'.
+    Now with context analysis to distinguish harmful vs safe usage.
     """
 
     def __init__(self):
@@ -146,6 +147,8 @@ class RuleEngine:
             r'\bpainkiller(?:s)?\b',
             r'\bdie-?cast(?:ing)?\b',
             r'\bstudied\b',
+            r'\bstudies\b',
+            r'\bstudying\b',
             r'\bsoldier(?:s)?\b',
             r'\baudience(?:s)?\b',
             r'\bdie(?:sel|t|tary|titian|tetics)\b',
@@ -431,6 +434,113 @@ class RuleEngine:
 
         self.url_regex = re.compile('|'.join(self.url_patterns), re.IGNORECASE)
         self.spam_regex = re.compile('|'.join(self.spam_patterns), re.IGNORECASE)
+        
+        logger.info("✅ Rule Engine initialized with enhanced context awareness")
+
+    def _analyze_context(self, text: str, matched_word: str, category: str) -> Dict[str, Any]:
+        """
+        Analyze context around a matched word to determine if usage is harmful.
+        
+        Returns:
+            {
+                'is_harmful': bool,
+                'confidence': float,
+                'context_type': str,
+                'reasoning': str
+            }
+        """
+        text_lower = text.lower()
+        
+        # First check if the matched word itself is in safe words list
+        if matched_word.lower() in self.safe_words:
+            return {
+                'is_harmful': False,
+                'confidence': 0.95,
+                'context_type': 'safe_word',
+                'reasoning': f"'{matched_word}' is in safe words list"
+            }
+        
+        # Step 1: Check for safe contexts first (override)
+        for pattern, context_type in self.safe_context_patterns:
+            match = re.search(pattern, text_lower, re.IGNORECASE)
+            if match:
+                # Get surrounding context (30 chars before and after)
+                start = max(0, match.start() - 30)
+                end = min(len(text_lower), match.end() + 30)
+                context = text_lower[start:end]
+                
+                if matched_word.lower() in context:
+                    return {
+                        'is_harmful': False,
+                        'confidence': 0.9,
+                        'context_type': context_type,
+                        'reasoning': f"Found in safe {context_type} context"
+                    }
+        
+        # Step 2: Check for harmful contexts
+        for harm_category, patterns in self.harmful_context_patterns.items():
+            for pattern, weight in patterns:
+                match = re.search(pattern, text_lower, re.IGNORECASE)
+                if match:
+                    start = max(0, match.start() - 30)
+                    end = min(len(text_lower), match.end() + 30)
+                    context = text_lower[start:end]
+                    
+                    if matched_word.lower() in context:
+                        return {
+                            'is_harmful': True,
+                            'confidence': weight,
+                            'context_type': harm_category,
+                            'reasoning': f"Found in harmful {harm_category} context"
+                        }
+        
+        # Step 3: Check surrounding words for educational context
+        words = text_lower.split()
+        for i, word in enumerate(words):
+            if matched_word.lower() in word:
+                start = max(0, i - 5)
+                end = min(len(words), i + 6)
+                surrounding = words[start:end]
+                
+                # Educational verbs indicate safe usage
+                educational_verbs = ['learn', 'study', 'practice', 'master', 'develop', 'improve', 'build', 'create']
+                if any(verb in surrounding for verb in educational_verbs):
+                    return {
+                        'is_harmful': False,
+                        'confidence': 0.85,
+                        'context_type': 'educational',
+                        'reasoning': f"Found near educational verbs"
+                    }
+                
+                # Harmful personal pronouns with harmful verbs
+                harmful_pronouns = ['i', 'me', 'myself', 'you', 'yourself']
+                harmful_verbs = ['want', 'need', 'will', 'going', 'plan', 'threat']
+                if any(pronoun in surrounding for pronoun in harmful_pronouns):
+                    if any(verb in surrounding for verb in harmful_verbs):
+                        return {
+                            'is_harmful': True,
+                            'confidence': 0.8,
+                            'context_type': 'personal_threat',
+                            'reasoning': f"Personal context with harmful intent"
+                        }
+        
+        # Step 4: Default based on category
+        # If it's in violence/harm category but no harmful context, assume safe
+        if category in ["violence", "harm"]:
+            return {
+                'is_harmful': False,
+                'confidence': 0.6,
+                'context_type': 'neutral',
+                'reasoning': f"No harmful context detected for {category} word"
+            }
+        
+        # Default to suspicious (fail-safe)
+        return {
+            'is_harmful': True,
+            'confidence': 0.5,
+            'context_type': 'unknown',
+            'reasoning': "No clear context, defaulting to suspicious"
+        }
 
     def normalize_text(self, text: str) -> str:
         """Normalize text to catch leetspeak and variations."""
@@ -810,6 +920,8 @@ class RuleEngine:
         elif unique_violations == 2:
             if any(cat in ["violence", "harm", "sexual"] for cat in results["keyword_categories"]):
                 results["rule_score"] = 0.7
+            elif "spam" in results["violations"]:
+                results["rule_score"] = 0.3
             else:
                 results["rule_score"] = 0.4
         else:

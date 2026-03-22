@@ -1,3 +1,8 @@
+"""
+Moderation Service - Orchestrates the entire moderation pipeline
+with full URL extractor integration
+"""
+
 from typing import Optional, Dict, Any, List
 import asyncio
 import logging
@@ -343,6 +348,31 @@ class ModerationService:
                     "post_id": post_id,
                 }
                 metrics_repository.insert_prediction(doc)
+                
+            # URL metrics
+            url_res = results.get("url_analysis") or {}
+            if url_res and url_res.get("total_urls", 0) > 0:
+                doc = {
+                    "timestamp": timestamp,
+                    "model": "url_extractor",
+                    "input_type": "urls",
+                    "input_preview": text[:200],
+                    "prediction": {
+                        "total_urls": url_res.get("total_urls", 0),
+                        "suspicious_urls": url_res.get("suspicious_urls", 0),
+                        "high_risk_urls": url_res.get("high_risk_urls", 0),
+                        "medium_risk_urls": url_res.get("medium_risk_urls", 0),
+                        "max_risk_score": url_res.get("max_risk_score", 0),
+                    },
+                    "confidence": float(url_res.get("max_risk_score", 0)),
+                    "response_time_ms": url_res.get("processing_time_ms", 0),
+                    "language": None,
+                    "category": "suspicious_urls" if url_res.get("has_suspicious", False) else "safe",
+                    "correct": None,
+                    "user_feedback": None,
+                    "post_id": post_id,
+                }
+                metrics_repository.insert_prediction(doc)
 
         except Exception as e:
             logger.error(f"Failed to record metrics for post {post_id}: {e}", exc_info=True)
@@ -536,11 +566,7 @@ class ModerationService:
                 "rule_based": rule_results,
                 "tech_relevance": tech_relevance,
                 "text_analysis": text_results,
-                "url_analysis": {
-                    "all_urls": urls,
-                    "suspicious_urls": suspicious_urls,
-                    "has_suspicious_urls": len(suspicious_urls) > 0,
-                },
+                "url_analysis": url_analysis_results,
                 "image_analysis": None,
                 "relevance_analysis": None,
                 "tech_context_filter": tech_ctx_result,
@@ -672,6 +698,12 @@ class ModerationService:
                 "post_id": post_id,
                 "allowed": decision["allowed"],
                 "results": results,
+                "url_summary": {
+                    "total_urls": url_analysis_results['total_urls'],
+                    "suspicious_urls": url_analysis_results['suspicious_urls_count'],
+                    "has_suspicious": url_analysis_results['has_suspicious_urls'],
+                    "max_risk_score": url_analysis_results['max_risk_score']
+                }
             }
  
         except Exception as e:
