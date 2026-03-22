@@ -18,8 +18,8 @@ git+https://github.com/openai/CLIP.git
 pillow>=10.1.0
 numpy>=1.26.0
 scikit-learn>=1.3.2
-sentencepiece==0.2.0
-tiktoken==0.5.1
+# sentencepiece>=0.1.99 (line 16 handles this)
+tiktoken>=0.5.1
 protobuf==3.20.3
 tqdm
 # Image processing
