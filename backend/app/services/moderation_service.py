@@ -12,6 +12,8 @@ from app.services.explanation_builder import ExplanationBuilder
 from app.services.url_extractor import url_extractor
 from app.ml.clip_model import clip_analyzer
 from app.ml.efficientnet_model import efficientnet_nsfw as nsfw_detector
+from app.ml.tech_context_filter import get_tech_context_filter
+from app.ml.intent_entity_filter import get_intent_entity_filter
 from app.db.mongodb import post_repository
  
 logger = logging.getLogger(__name__)
@@ -292,6 +294,56 @@ class ModerationService:
                 }
                 metrics_repository.insert_prediction(doc)
  
+            # TechContextFilter metrics
+            tcf_res = results.get("tech_context_filter") or {}
+            if tcf_res:
+                doc = {
+                    "timestamp": timestamp,
+                    "model": "tech_context_filter",
+                    "input_type": "text",
+                    "input_preview": text[:200],
+                    "prediction": {
+                        "is_harmful": tcf_res.get("is_harmful", False),
+                        "category": tcf_res.get("category"),
+                        "confidence": tcf_res.get("confidence", 0.0),
+                        "pattern_matched": tcf_res.get("pattern_matched", False),
+                        "ml_used": tcf_res.get("ml_used", False),
+                    },
+                    "confidence": float(tcf_res.get("confidence", 0.0)),
+                    "response_time_ms": tcf_res.get("processing_time_ms"),
+                    "language": "unknown",
+                    "category": tcf_res.get("category", "unknown"),
+                    "correct": None,
+                    "user_feedback": None,
+                    "post_id": post_id,
+                }
+                metrics_repository.insert_prediction(doc)
+
+            # IntentEntityFilter metrics
+            ief_res = results.get("intent_entity_filter") or {}
+            if ief_res:
+                doc = {
+                    "timestamp": timestamp,
+                    "model": "intent_entity_filter",
+                    "input_type": "text",
+                    "input_preview": text[:200],
+                    "prediction": {
+                        "is_harmful": ief_res.get("is_harmful", False),
+                        "category": ief_res.get("category"),
+                        "confidence": ief_res.get("confidence", 0.0),
+                        "entity_boost": ief_res.get("entity_boost", 0.0),
+                        "ml_used": ief_res.get("ml_used", False),
+                    },
+                    "confidence": float(ief_res.get("confidence", 0.0)),
+                    "response_time_ms": ief_res.get("processing_time_ms"),
+                    "language": "unknown",
+                    "category": ief_res.get("category", "unknown"),
+                    "correct": None,
+                    "user_feedback": None,
+                    "post_id": post_id,
+                }
+                metrics_repository.insert_prediction(doc)
+
         except Exception as e:
             logger.error(f"Failed to record metrics for post {post_id}: {e}", exc_info=True)
  
@@ -334,6 +386,39 @@ class ModerationService:
             if suspicious_urls:
                 logger.warning(f"   Suspicious URLs: {suspicious_urls}")
  
+            # ── Step 2c: Advanced cyber-harm & intent filters ──
+            tech_ctx_result = {}
+            intent_result   = {}
+            try:
+                tech_ctx_result = await self._run_sync(get_tech_context_filter().analyze, text)
+                logger.info(
+                    f"🛡️  TechContextFilter — harmful={tech_ctx_result.get('is_harmful')}, "
+                    f"category={tech_ctx_result.get('category')}, "
+                    f"confidence={tech_ctx_result.get('confidence', 0):.3f}"
+                )
+            except Exception as e:
+                logger.error(f"TechContextFilter failed: {e}", exc_info=True)
+ 
+            try:
+                intent_result = await self._run_sync(get_intent_entity_filter().analyze, text)
+                logger.info(
+                    f"🔎 IntentEntityFilter — harmful={intent_result.get('is_harmful')}, "
+                    f"category={intent_result.get('category')}, "
+                    f"confidence={intent_result.get('confidence', 0):.3f}"
+                )
+            except Exception as e:
+                logger.error(f"IntentEntityFilter failed: {e}", exc_info=True)
+ 
+            # Derive composite cyber-harm signal for decision engine
+            tcf_score = tech_ctx_result.get('confidence', 0.0) if tech_ctx_result.get('is_harmful') else 0.0
+            ief_score = intent_result.get('confidence', 0.0)   if intent_result.get('is_harmful')   else 0.0
+            cyber_harm_score = max(tcf_score, ief_score)
+            cyber_harm_category = (
+                tech_ctx_result.get('category', '') if tcf_score >= ief_score and tcf_score > 0
+                else intent_result.get('category', '')
+            )
+            content_mixing_detected = tech_relevance.get('mixing', {}).get('mixing_detected', False)
+ 
             # ── Early Exit A: Severe harm rule violation (skip tech check) ──
             if rule_results.get('rule_score', 0) > 0.8:
                 logger.warning(
@@ -347,7 +432,9 @@ class ModerationService:
                         "all_urls": urls,
                         "suspicious_urls": suspicious_urls,
                         "has_suspicious_urls": len(suspicious_urls) > 0,
-                    }
+                    },
+                    "tech_context_filter": tech_ctx_result,
+                    "intent_entity_filter": intent_result,
                 }
                 decision_input = {
                     'rule_score': rule_results.get('rule_score', 1.0),
@@ -362,7 +449,11 @@ class ModerationService:
                     'drugs_score': 0.0,
                     'threats_score': 0.0,
                     'is_harmful': True,
-                    'nsfw_score': 0.0
+                    'nsfw_score': 0.0,
+                    'cyber_harm_score': cyber_harm_score,
+                    'cyber_harm_category': cyber_harm_category,
+                    'content_mixing_detected': content_mixing_detected,
+                    'clip_similarity': None,
                 }
                 decision = self.decision_engine.make_decision(decision_input)
                 explanation = self.explanation_builder.build_explanation(decision, results)
@@ -390,6 +481,8 @@ class ModerationService:
                     },
                     "image_analysis": None,
                     "relevance_analysis": None,
+                    "tech_context_filter": tech_ctx_result,
+                    "intent_entity_filter": intent_result,
                 }
                 decision_input = {
                     'rule_score': rule_results.get('rule_score', 0.0),
@@ -404,7 +497,10 @@ class ModerationService:
                     'drugs_score': 0.0,
                     'threats_score': 0.0,
                     'is_harmful': False,
-                    'nsfw_score': 0.0
+                    'nsfw_score': 0.0,
+                    'cyber_harm_score': cyber_harm_score,
+                    'cyber_harm_category': cyber_harm_category,
+                    'content_mixing_detected': content_mixing_detected,
                 }
                 decision = self.decision_engine.make_decision(decision_input)
                 explanation = self.explanation_builder.build_explanation(decision, results)
@@ -447,6 +543,8 @@ class ModerationService:
                 },
                 "image_analysis": None,
                 "relevance_analysis": None,
+                "tech_context_filter": tech_ctx_result,
+                "intent_entity_filter": intent_result,
             }
  
             # ── Steps 4 & 5: Image analysis ──
@@ -507,6 +605,13 @@ class ModerationService:
                 # Tech relevance from rule engine (authoritative)
                 'tech_relevance_score': tech_relevance['tech_relevance_score'],
                 'tech_zone': tech_relevance['zone'],
+                # Cyber-harm & content-mixing signals from advanced filters
+                'cyber_harm_score': cyber_harm_score,
+                'cyber_harm_category': cyber_harm_category,
+                'content_mixing_detected': content_mixing_detected,
+
+                # CLIP image-text similarity score
+                'clip_similarity': (results.get("relevance_analysis") or {}).get("similarity_score", None),
             }
  
             for model_key, decision_key in score_mapping.items():

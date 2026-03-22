@@ -50,7 +50,7 @@ export default function PostCard({ post }) {
           {post.image_path && (
             <div className="mt-3 rounded-2xl overflow-hidden border border-gray-100 mb-3 bg-gray-50 max-h-[400px]">
               <img 
-                src={"http://localhost:8000" + post.image_path} 
+                src={`http://localhost:8000${post.image_path.startsWith('/uploads') ? post.image_path : '/uploads' + (post.image_path.startsWith('/') ? '' : '/') + post.image_path}`}
                 alt="Post content" 
                 className="w-full h-full object-cover"
               />

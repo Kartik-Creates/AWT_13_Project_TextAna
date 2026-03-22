@@ -1,0 +1,79 @@
+Collecting git+https://github.com/openai/CLIP.git
+  Cloning https://github.com/openai/CLIP.git to c:\users\girish\appdata\local\temp\pip-req-build-c8q_o1nf
+  Running command git clone --filter=blob:none --quiet https://github.com/openai/CLIP.git 'C:\Users\Girish\AppData\Local\Temp\pip-req-build-c8q_o1nf'
+  Resolved https://github.com/openai/CLIP.git to commit ded190a052fdf4585bd685cee5bc96e0310d2c93
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting ftfy (from clip==1.0)
+  Using cached ftfy-6.3.1-py3-none-any.whl.metadata (7.3 kB)
+Collecting packaging (from clip==1.0)
+  Using cached packaging-26.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting regex (from clip==1.0)
+  Using cached regex-2026.2.28-cp313-cp313-win_amd64.whl.metadata (41 kB)
+Collecting tqdm (from clip==1.0)
+  Using cached tqdm-4.67.3-py3-none-any.whl.metadata (57 kB)
+Collecting torch (from clip==1.0)
+  Using cached torch-2.10.0-cp313-cp313-win_amd64.whl.metadata (31 kB)
+Collecting torchvision (from clip==1.0)
+  Using cached torchvision-0.25.0-cp313-cp313-win_amd64.whl.metadata (5.4 kB)
+Collecting wcwidth (from ftfy->clip==1.0)
+  Using cached wcwidth-0.6.0-py3-none-any.whl.metadata (30 kB)
+Collecting filelock (from torch->clip==1.0)
+  Using cached filelock-3.25.2-py3-none-any.whl.metadata (2.0 kB)
+Collecting typing-extensions>=4.10.0 (from torch->clip==1.0)
+  Using cached typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting sympy>=1.13.3 (from torch->clip==1.0)
+  Using cached sympy-1.14.0-py3-none-any.whl.metadata (12 kB)
+Collecting networkx>=2.5.1 (from torch->clip==1.0)
+  Using cached networkx-3.6.1-py3-none-any.whl.metadata (6.8 kB)
+Collecting jinja2 (from torch->clip==1.0)
+  Using cached jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+Collecting fsspec>=0.8.5 (from torch->clip==1.0)
+  Using cached fsspec-2026.2.0-py3-none-any.whl.metadata (10 kB)
+Collecting setuptools (from torch->clip==1.0)
+  Using cached setuptools-82.0.1-py3-none-any.whl.metadata (6.5 kB)
+Collecting mpmath<1.4,>=1.1.0 (from sympy>=1.13.3->torch->clip==1.0)
+  Using cached mpmath-1.3.0-py3-none-any.whl.metadata (8.6 kB)
+Collecting MarkupSafe>=2.0 (from jinja2->torch->clip==1.0)
+  Using cached markupsafe-3.0.3-cp313-cp313-win_amd64.whl.metadata (2.8 kB)
+Collecting numpy (from torchvision->clip==1.0)
+  Using cached numpy-2.4.3-cp313-cp313-win_amd64.whl.metadata (6.6 kB)
+Collecting pillow!=8.3.*,>=5.3.0 (from torchvision->clip==1.0)
+  Using cached pillow-12.1.1-cp313-cp313-win_amd64.whl.metadata (9.0 kB)
+Collecting colorama (from tqdm->clip==1.0)
+  Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)
+Using cached ftfy-6.3.1-py3-none-any.whl (44 kB)
+Using cached packaging-26.0-py3-none-any.whl (74 kB)
+Using cached regex-2026.2.28-cp313-cp313-win_amd64.whl (277 kB)
+Using cached torch-2.10.0-cp313-cp313-win_amd64.whl (113.8 MB)
+Using cached fsspec-2026.2.0-py3-none-any.whl (202 kB)
+Using cached networkx-3.6.1-py3-none-any.whl (2.1 MB)
+Using cached sympy-1.14.0-py3-none-any.whl (6.3 MB)
+Using cached mpmath-1.3.0-py3-none-any.whl (536 kB)
+Using cached typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+Using cached filelock-3.25.2-py3-none-any.whl (26 kB)
+Using cached jinja2-3.1.6-py3-none-any.whl (134 kB)
+Using cached markupsafe-3.0.3-cp313-cp313-win_amd64.whl (15 kB)
+Using cached setuptools-82.0.1-py3-none-any.whl (1.0 MB)
+Using cached torchvision-0.25.0-cp313-cp313-win_amd64.whl (4.3 MB)
+Using cached pillow-12.1.1-cp313-cp313-win_amd64.whl (7.0 MB)
+Using cached numpy-2.4.3-cp313-cp313-win_amd64.whl (12.3 MB)
+Using cached tqdm-4.67.3-py3-none-any.whl (78 kB)
+Using cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)
+Using cached wcwidth-0.6.0-py3-none-any.whl (94 kB)
+Building wheels for collected packages: clip
+  Building wheel for clip (pyproject.toml): started
+  Building wheel for clip (pyproject.toml): finished with status 'done'
+  Created wheel for clip: filename=clip-1.0-py3-none-any.whl size=1369631 sha256=255f3c121cb4db3905adcf642bf65e0b0ac62d3ae4256d96e3cec880325f4516
+  Stored in directory: C:\Users\Girish\AppData\Local\Temp\pip-ephem-wheel-cache-lxxztct1\wheels\cb\a8\74\5f32d6cf0407457f0f62737b6da5c14eb86b9cac476fdf630d
+Successfully built clip
+Installing collected packages: mpmath, wcwidth, typing-extensions, sympy, setuptools, regex, pillow, packaging, numpy, networkx, MarkupSafe, fsspec, filelock, colorama, tqdm, jinja2, ftfy, torch, torchvision, clip
+
+Successfully installed MarkupSafe-3.0.3 clip-1.0 colorama-0.4.6 filelock-3.25.2 fsspec-2026.2.0 ftfy-6.3.1 jinja2-3.1.6 mpmath-1.3.0 networkx-3.6.1 numpy-2.4.3 packaging-26.0 pillow-12.1.1 regex-2026.2.28 setuptools-82.0.1 sympy-1.14.0 torch-2.10.0 torchvision-0.25.0 tqdm-4.67.3 typing-extensions-4.15.0 wcwidth-0.6.0
+
+[notice] A new release of pip is available: 25.1.1 -> 26.0.1
+[notice] To update, run: C:\Users\Girish\OneDrive\Desktop\New folder (2)\awt_textana\AWT_13_Project_TextAna\backend\venv\Scripts\python.exe -m pip install --upgrade pip

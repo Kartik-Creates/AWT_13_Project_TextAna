@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import logging
+import re
 
 from app.db.mongodb import MongoDB
 
@@ -8,19 +9,29 @@ logger = logging.getLogger(__name__)
 
 
 class MetricsRepository:
-    """Repository for prediction metrics and aggregated model statistics."""
+    """Repository for prediction metrics and aggregated model statistics.
+
+    Stores one document per pipeline stage per post into the
+    `prediction_metrics` MongoDB collection, then provides
+    aggregated read views for the dashboard.
+
+    New in this version:
+      - Tech relevance metrics (zone distribution, avg score)
+      - Off-topic block tracking
+      - Tech vs harm breakdown in outcomes
+    """
 
     def __init__(self) -> None:
         self.db = MongoDB()
         self.collection = self.db.prediction_metrics
 
-        # Simple in-memory caches to avoid heavy aggregations on every request
+        # In-memory cache to avoid heavy aggregations on every request
         self._cache: Dict[str, Tuple[datetime, Any]] = {}
         self._cache_ttl = timedelta(seconds=30)
 
-    # ───────────────────────────────
-    # Write path
-    # ───────────────────────────────
+    # ───────────────────────────────────────────────────────────
+    #  Write path
+    # ───────────────────────────────────────────────────────────
 
     def insert_prediction(self, doc: Dict[str, Any]) -> None:
         """Insert a single prediction metrics document."""
@@ -30,9 +41,9 @@ class MetricsRepository:
         except Exception as e:
             logger.error(f"Failed to insert prediction metrics: {e}", exc_info=True)
 
-    # ───────────────────────────────
-    # Cache helpers
-    # ───────────────────────────────
+    # ───────────────────────────────────────────────────────────
+    #  Cache helpers
+    # ───────────────────────────────────────────────────────────
 
     def _get_from_cache(self, key: str) -> Optional[Any]:
         entry = self._cache.get(key)
@@ -47,9 +58,14 @@ class MetricsRepository:
         self._cache[key] = (datetime.utcnow(), value)
         return value
 
-    # ───────────────────────────────
-    # Read path – aggregations
-    # ───────────────────────────────
+    def invalidate_cache(self) -> None:
+        """Manually clear the in-memory cache."""
+        self._cache.clear()
+        logger.info("Metrics cache invalidated")
+
+    # ───────────────────────────────────────────────────────────
+    #  Read path — basic aggregations
+    # ───────────────────────────────────────────────────────────
 
     def get_model_metrics(self) -> Dict[str, Any]:
         """Aggregate per-model performance statistics."""
@@ -67,20 +83,12 @@ class MetricsRepository:
                     "avg_confidence": {"$avg": "$confidence"},
                     "correct": {
                         "$sum": {
-                            "$cond": [
-                                {"$eq": ["$correct", True]},
-                                1,
-                                0,
-                            ]
+                            "$cond": [{"$eq": ["$correct", True]}, 1, 0]
                         }
                     },
                     "total_with_correct": {
                         "$sum": {
-                            "$cond": [
-                                {"$in": ["$correct", [True, False]]},
-                                1,
-                                0,
-                            ]
+                            "$cond": [{"$in": ["$correct", [True, False]]}, 1, 0]
                         }
                     },
                 }
@@ -115,12 +123,7 @@ class MetricsRepository:
 
         pipeline = [
             {"$match": {"input_type": "text"}},
-            {
-                "$group": {
-                    "_id": "$language",
-                    "count": {"$sum": 1},
-                }
-            },
+            {"$group": {"_id": "$language", "count": {"$sum": 1}}},
         ]
 
         total = 0
@@ -149,12 +152,7 @@ class MetricsRepository:
             return cached
 
         pipeline = [
-            {
-                "$group": {
-                    "_id": "$category",
-                    "count": {"$sum": 1},
-                }
-            }
+            {"$group": {"_id": "$category", "count": {"$sum": 1}}}
         ]
 
         total = 0
@@ -184,11 +182,7 @@ class MetricsRepository:
 
         docs: List[Dict[str, Any]] = []
         try:
-            cursor = (
-                self.collection.find()
-                .sort("timestamp", -1)
-                .limit(limit)
-            )
+            cursor = self.collection.find().sort("timestamp", -1).limit(limit)
             for doc in cursor:
                 doc["_id"] = str(doc["_id"])
                 if "timestamp" in doc and hasattr(doc["timestamp"], "isoformat"):
@@ -200,7 +194,7 @@ class MetricsRepository:
         return self._set_cache(cache_key, docs)
 
     def get_system_health(self) -> Dict[str, Any]:
-        """Very lightweight system health summary based on metrics."""
+        """Lightweight system health summary based on metrics."""
         cache_key = "system_health"
         cached = self._get_from_cache(cache_key)
         if cached is not None:
@@ -234,13 +228,157 @@ class MetricsRepository:
 
         return self._set_cache(cache_key, payload)
 
+    # ───────────────────────────────────────────────────────────
+    #  Tech relevance metrics  ← NEW
+    # ───────────────────────────────────────────────────────────
 
-    # ───────────────────────────────
-    # Advanced metrics (new dashboard)
-    # ───────────────────────────────
+    def get_tech_relevance_metrics(self, hours: int = 24) -> Dict[str, Any]:
+        """Aggregate tech relevance metrics for the dashboard.
+
+        Returns:
+          zone_distribution     : count + % for tech / review / off_topic
+          avg_tech_score        : average tech_relevance_score across all text posts
+          off_topic_block_count : posts blocked specifically for being off-topic
+          top_matched_categories: most frequently matched tech taxonomy categories
+          top_non_tech_signals  : most common off-topic signals that triggered blocks
+        """
+        cache_key = f"tech_relevance_metrics_{hours}"
+        cached = self._get_from_cache(cache_key)
+        if cached is not None:
+            return cached
+
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        time_filter = {"timestamp": {"$gte": cutoff}}
+
+        result: Dict[str, Any] = {
+            "zone_distribution": self._calc_zone_distribution(time_filter),
+            "avg_tech_score": self._calc_avg_tech_score(time_filter),
+            "off_topic_block_count": self._calc_off_topic_blocks(time_filter),
+            "top_matched_categories": self._calc_top_tech_categories(time_filter),
+            "top_non_tech_signals": self._calc_top_non_tech_signals(time_filter),
+        }
+
+        return self._set_cache(cache_key, result)
+
+    def _calc_zone_distribution(self, time_filter: dict) -> Dict[str, Any]:
+        """Count of tech / review / off_topic zone decisions."""
+        try:
+            pipeline = [
+                {"$match": {
+                    **time_filter,
+                    "model": "rule_engine_tech",
+                }},
+                {"$group": {
+                    "_id": "$prediction.zone",
+                    "count": {"$sum": 1},
+                }},
+            ]
+            zones: Dict[str, int] = {"tech": 0, "review": 0, "off_topic": 0}
+            total = 0
+            for row in self.collection.aggregate(pipeline):
+                z = row["_id"] or "unknown"
+                c = int(row.get("count", 0))
+                zones[z] = c
+                total += c
+
+            return {
+                "tech":      {"count": zones["tech"],      "pct": round(zones["tech"] / total * 100, 1) if total else 0},
+                "review":    {"count": zones["review"],    "pct": round(zones["review"] / total * 100, 1) if total else 0},
+                "off_topic": {"count": zones["off_topic"], "pct": round(zones["off_topic"] / total * 100, 1) if total else 0},
+                "total": total,
+            }
+        except Exception as e:
+            logger.error(f"Zone distribution calc failed: {e}", exc_info=True)
+            return {"tech": {}, "review": {}, "off_topic": {}, "total": 0}
+
+    def _calc_avg_tech_score(self, time_filter: dict) -> float:
+        """Average tech_relevance_score across rule_engine_tech predictions."""
+        try:
+            pipeline = [
+                {"$match": {
+                    **time_filter,
+                    "model": "rule_engine_tech",
+                    "confidence": {"$exists": True, "$ne": None},
+                }},
+                {"$group": {"_id": None, "avg": {"$avg": "$confidence"}}},
+            ]
+            for row in self.collection.aggregate(pipeline):
+                return round(float(row.get("avg", 0)), 3)
+        except Exception as e:
+            logger.error(f"Avg tech score calc failed: {e}", exc_info=True)
+        return 0.0
+
+    def _calc_off_topic_blocks(self, time_filter: dict) -> int:
+        """Count of posts blocked specifically for being off-topic."""
+        try:
+            return int(self.collection.count_documents({
+                **time_filter,
+                "model": "rule_engine_tech",
+                "category": "off_topic",
+            }))
+        except Exception as e:
+            logger.error(f"Off-topic block count failed: {e}", exc_info=True)
+            return 0
+
+    def _calc_top_tech_categories(self, time_filter: dict, top_n: int = 8) -> List[Dict[str, Any]]:
+        """Most frequently matched tech taxonomy categories."""
+        try:
+            pipeline = [
+                {"$match": {
+                    **time_filter,
+                    "model": "rule_engine_tech",
+                    "prediction.matched_categories": {"$exists": True, "$ne": []},
+                }},
+                {"$unwind": "$prediction.matched_categories"},
+                {"$group": {
+                    "_id": "$prediction.matched_categories",
+                    "count": {"$sum": 1},
+                }},
+                {"$sort": {"count": -1}},
+                {"$limit": top_n},
+            ]
+            return [
+                {"category": row["_id"], "count": int(row["count"])}
+                for row in self.collection.aggregate(pipeline)
+            ]
+        except Exception as e:
+            logger.error(f"Top tech categories calc failed: {e}", exc_info=True)
+            return []
+
+    def _calc_top_non_tech_signals(self, time_filter: dict, top_n: int = 6) -> List[Dict[str, Any]]:
+        """Most common off-topic signals detected on blocked posts."""
+        try:
+            pipeline = [
+                {"$match": {
+                    **time_filter,
+                    "model": "rule_engine_tech",
+                    "category": "off_topic",
+                }},
+                {"$group": {
+                    "_id": None,
+                    "all_signals": {"$push": "$prediction.non_tech_signals"},
+                }},
+            ]
+            signal_counts: Dict[str, int] = {}
+            for row in self.collection.aggregate(pipeline):
+                all_signals = row.get("all_signals", [])
+                for signal_list in all_signals:
+                    if isinstance(signal_list, list):
+                        for signal in signal_list:
+                            signal_counts[signal] = signal_counts.get(signal, 0) + 1
+
+            sorted_signals = sorted(signal_counts.items(), key=lambda x: -x[1])[:top_n]
+            return [{"signal": s, "count": c} for s, c in sorted_signals]
+        except Exception as e:
+            logger.error(f"Top non-tech signals calc failed: {e}", exc_info=True)
+            return []
+
+    # ───────────────────────────────────────────────────────────
+    #  Advanced metrics (full dashboard)
+    # ───────────────────────────────────────────────────────────
 
     def get_advanced_metrics(self, hours: int = 24) -> Dict[str, Any]:
-        """Return all advanced metrics for the redesigned dashboard."""
+        """Return all advanced metrics for the dashboard."""
         cache_key = f"advanced_metrics_{hours}"
         cached = self._get_from_cache(cache_key)
         if cached is not None:
@@ -251,16 +389,18 @@ class MetricsRepository:
         time_filter = {"timestamp": {"$gte": cutoff}}
 
         result: Dict[str, Any] = {
-            "latency": self._calc_latency(time_filter),
-            "outcomes": self._calc_outcomes(time_filter),
-            "confidence_distribution": self._calc_confidence_buckets(time_filter),
-            "prediction_volume": self._calc_prediction_volume(now),
-            "edge_cases": self._calc_edge_cases(time_filter),
-            "top_keywords": self._calc_top_keywords(time_filter),
-            "recent_critical": self._calc_recent_critical(time_filter),
-            "pipeline_latency": self._calc_pipeline_latency(time_filter),
-            "model_agreement": self._calc_model_agreement(time_filter),
-            "false_positives": self._calc_false_positives(time_filter),
+            "latency":                  self._calc_latency(time_filter),
+            "outcomes":                 self._calc_outcomes(time_filter),
+            "confidence_distribution":  self._calc_confidence_buckets(time_filter),
+            "prediction_volume":        self._calc_prediction_volume(now),
+            "edge_cases":               self._calc_edge_cases(time_filter),
+            "top_keywords":             self._calc_top_keywords(time_filter),
+            "recent_critical":          self._calc_recent_critical(time_filter),
+            "pipeline_latency":         self._calc_pipeline_latency(time_filter),
+            "model_agreement":          self._calc_model_agreement(time_filter),
+            "false_positives":          self._calc_false_positives(time_filter),
+            # Tech relevance section
+            "tech_relevance":           self.get_tech_relevance_metrics(hours),
         }
 
         return self._set_cache(cache_key, result)
@@ -288,10 +428,10 @@ class MetricsRepository:
                 p95 = times[int(n * 0.95)] if n > 0 else 0
                 p99 = times[int(min(n * 0.99, n - 1))] if n > 0 else 0
                 out[model] = {
-                    "p95": round(p95, 1),
-                    "p99": round(p99, 1),
-                    "max": round(row.get("max", 0), 1),
-                    "avg": round(row.get("avg", 0), 1),
+                    "p95":   round(p95, 1),
+                    "p99":   round(p99, 1),
+                    "max":   round(row.get("max", 0), 1),
+                    "avg":   round(row.get("avg", 0), 1),
                     "count": row.get("count", 0),
                 }
             return out
@@ -300,14 +440,11 @@ class MetricsRepository:
             return {}
 
     def _calc_outcomes(self, time_filter: dict) -> Dict[str, Any]:
-        """Allowed/blocked counts + top block reasons."""
+        """Allowed/blocked counts + top block reasons, with off-topic split."""
         try:
             pipeline = [
                 {"$match": time_filter},
-                {"$group": {
-                    "_id": "$category",
-                    "count": {"$sum": 1},
-                }},
+                {"$group": {"_id": "$category", "count": {"$sum": 1}}},
             ]
             cats: Dict[str, int] = {}
             total = 0
@@ -318,29 +455,44 @@ class MetricsRepository:
                 total += c
 
             safe_count = cats.get("safe", 0)
+            off_topic_count = cats.get("off_topic", 0)
+            harm_blocked = total - safe_count - off_topic_count
             blocked_count = total - safe_count
 
-            # Top block reasons (all categories except "safe")
             reasons = [
-                {"reason": k, "count": v, "percentage": round(v / blocked_count * 100, 1) if blocked_count else 0}
+                {
+                    "reason": k,
+                    "count": v,
+                    "percentage": round(v / blocked_count * 100, 1) if blocked_count else 0,
+                }
                 for k, v in sorted(cats.items(), key=lambda x: -x[1])
                 if k != "safe"
             ]
 
             return {
-                "total": total,
-                "allowed": safe_count,
-                "allowed_pct": round(safe_count / total * 100, 1) if total else 0,
-                "blocked": blocked_count,
-                "blocked_pct": round(blocked_count / total * 100, 1) if total else 0,
-                "top_reasons": reasons[:8],
+                "total":           total,
+                "allowed":         safe_count,
+                "allowed_pct":     round(safe_count / total * 100, 1) if total else 0,
+                "blocked":         blocked_count,
+                "blocked_pct":     round(blocked_count / total * 100, 1) if total else 0,
+                "off_topic_blocked":      off_topic_count,
+                "off_topic_blocked_pct":  round(off_topic_count / total * 100, 1) if total else 0,
+                "harm_blocked":           harm_blocked,
+                "harm_blocked_pct":       round(harm_blocked / total * 100, 1) if total else 0,
+                "top_reasons":     reasons[:8],
             }
         except Exception as e:
             logger.error(f"Outcomes calc failed: {e}", exc_info=True)
-            return {"total": 0, "allowed": 0, "allowed_pct": 0, "blocked": 0, "blocked_pct": 0, "top_reasons": []}
+            return {
+                "total": 0, "allowed": 0, "allowed_pct": 0,
+                "blocked": 0, "blocked_pct": 0,
+                "off_topic_blocked": 0, "off_topic_blocked_pct": 0,
+                "harm_blocked": 0, "harm_blocked_pct": 0,
+                "top_reasons": [],
+            }
 
     def _calc_confidence_buckets(self, time_filter: dict) -> Dict[str, Any]:
-        """Confidence distribution in buckets."""
+        """Confidence distribution in low / medium / high buckets."""
         try:
             pipeline = [
                 {"$match": {**time_filter, "confidence": {"$exists": True, "$ne": None}}},
@@ -365,13 +517,12 @@ class MetricsRepository:
     def _calc_prediction_volume(self, now: datetime) -> Dict[str, Any]:
         """Predictions in last 1h, 24h, and peak per hour."""
         try:
-            h1 = now - timedelta(hours=1)
+            h1  = now - timedelta(hours=1)
             h24 = now - timedelta(hours=24)
 
-            last_1h = self.collection.count_documents({"timestamp": {"$gte": h1}})
+            last_1h  = self.collection.count_documents({"timestamp": {"$gte": h1}})
             last_24h = self.collection.count_documents({"timestamp": {"$gte": h24}})
 
-            # Peak per hour in last 24h
             pipeline = [
                 {"$match": {"timestamp": {"$gte": h24}}},
                 {"$group": {
@@ -396,25 +547,22 @@ class MetricsRepository:
             return {"last_1h": 0, "last_24h": 0, "peak_per_hour": 0}
 
     def _calc_edge_cases(self, time_filter: dict) -> Dict[str, Any]:
-        """Count short text, empty, URL-only inputs."""
+        """Count short text, empty, and URL-only inputs."""
         try:
             base_match = {**time_filter, "input_type": "text"}
-
-            # Short text: preview has fewer than 5 words
             short = 0
             empty = 0
             url_only = 0
+            url_re = re.compile(r'^https?://\S+$', re.IGNORECASE)
 
             cursor = self.collection.find(
                 {**base_match, "input_preview": {"$exists": True}},
                 {"input_preview": 1}
             )
-            import re
-            url_re = re.compile(r'^https?://\S+$', re.IGNORECASE)
             for doc in cursor:
                 preview = doc.get("input_preview", "") or ""
                 words = preview.strip().split()
-                if len(words) == 0 or preview.strip() == "":
+                if len(words) == 0 or not preview.strip():
                     empty += 1
                 elif len(words) < 5:
                     short += 1
@@ -426,14 +574,13 @@ class MetricsRepository:
             logger.error(f"Edge case calc failed: {e}", exc_info=True)
             return {"short_text": 0, "empty_input": 0, "url_only": 0}
 
-    def _calc_top_keywords(self, time_filter: dict) -> list:
-        """Most frequent trigger keywords from prediction data."""
+    def _calc_top_keywords(self, time_filter: dict) -> List[Dict[str, Any]]:
+        """Most frequent trigger categories from blocked predictions."""
         try:
-            # Look for predictions with 'category' not in safe categories
             pipeline = [
                 {"$match": {
                     **time_filter,
-                    "category": {"$nin": [None, "safe", "mismatch"]},
+                    "category": {"$nin": [None, "safe", "mismatch", "off_topic", "review"]},
                 }},
                 {"$group": {"_id": "$category", "count": {"$sum": 1}}},
                 {"$sort": {"count": -1}},
@@ -447,7 +594,7 @@ class MetricsRepository:
             logger.error(f"Top keywords calc failed: {e}", exc_info=True)
             return []
 
-    def _calc_recent_critical(self, time_filter: dict) -> list:
+    def _calc_recent_critical(self, time_filter: dict) -> List[Dict[str, Any]]:
         """Recent high-severity flagged content."""
         try:
             critical_cats = [
@@ -476,15 +623,12 @@ class MetricsRepository:
             logger.error(f"Recent critical calc failed: {e}", exc_info=True)
             return []
 
-    def _calc_pipeline_latency(self, time_filter: dict) -> Dict[str, Any]:
+    def _calc_pipeline_latency(self, time_filter: dict) -> Dict[str, float]:
         """Average response time per model (pipeline stage breakdown)."""
         try:
             pipeline = [
                 {"$match": {**time_filter, "response_time_ms": {"$exists": True, "$ne": None}}},
-                {"$group": {
-                    "_id": "$model",
-                    "avg": {"$avg": "$response_time_ms"},
-                }},
+                {"$group": {"_id": "$model", "avg": {"$avg": "$response_time_ms"}}},
             ]
             out: Dict[str, float] = {}
             for row in self.collection.aggregate(pipeline):
@@ -496,9 +640,8 @@ class MetricsRepository:
             return {}
 
     def _calc_model_agreement(self, time_filter: dict) -> Dict[str, Any]:
-        """Percentage where all models agree on the same classification."""
+        """Percentage of posts where all models agree on allow/block."""
         try:
-            # Group predictions by post_id
             pipeline = [
                 {"$match": {**time_filter, "post_id": {"$exists": True}}},
                 {"$group": {
@@ -513,7 +656,6 @@ class MetricsRepository:
             for row in self.collection.aggregate(pipeline):
                 total_posts += 1
                 cats = row.get("categories", [])
-                # All safe or all non-safe = agreement
                 safe_count = sum(1 for c in cats if c == "safe")
                 if safe_count == len(cats) or safe_count == 0:
                     agreed += 1
@@ -525,31 +667,26 @@ class MetricsRepository:
             return {"agreement_pct": 0, "total_posts": 0, "agreed": 0}
 
     def _calc_false_positives(self, time_filter: dict) -> Dict[str, Any]:
-        """Posts where ML says safe (high confidence) but still got blocked."""
+        """Posts where ML is confident it's safe, but still got blocked."""
         try:
-            # Look for text predictions with safe category and high confidence
-            # that belong to posts that got blocked (category != safe for another model)
             pipeline = [
-                {"$match": {
-                    **time_filter,
-                    "post_id": {"$exists": True},
-                }},
+                {"$match": {**time_filter, "post_id": {"$exists": True}}},
                 {"$group": {
                     "_id": "$post_id",
                     "predictions": {
                         "$push": {
-                            "model": "$model",
-                            "category": "$category",
+                            "model":      "$model",
+                            "category":   "$category",
                             "confidence": "$confidence",
                         }
                     },
                 }},
             ]
-            count = 0
+            count: int = 0
             for row in self.collection.aggregate(pipeline):
                 preds = row.get("predictions", [])
                 has_safe_ml = any(
-                    p.get("category") == "safe" and (p.get("confidence", 0) or 0) > 0.7
+                    p.get("category") == "safe" and (p.get("confidence") or 0) > 0.7
                     for p in preds
                     if p.get("model") in ("roberta", "efficientnet")
                 )
@@ -558,7 +695,7 @@ class MetricsRepository:
                     for p in preds
                 )
                 if has_safe_ml and has_block:
-                    count += 1
+                    count = count + 1
 
             return {"count": count}
         except Exception as e:
@@ -566,5 +703,8 @@ class MetricsRepository:
             return {"count": 0}
 
 
-metrics_repository = MetricsRepository()
+# ──────────────────────────────────────────────────────────────────────────────
+#  Global singleton instance
+# ──────────────────────────────────────────────────────────────────────────────
 
+metrics_repository = MetricsRepository()
