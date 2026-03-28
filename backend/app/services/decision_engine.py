@@ -7,7 +7,7 @@ off-topic content — harm checks always run for confirmed tech posts.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 
-// Existing (updated) components
-import ModelCard from "./ModelCard";
+// Existing (updated) components - REMOVED ModelCard import
 import ConfusionMatrix from "./ConfusionMatrix";
 import CategoryBarChart from "./CategoryBarChart";
 import RecentPredictionsTable from "./RecentPredictionsTable";
@@ -66,9 +65,7 @@ export default function ModelMetricsDashboard() {
     return () => clearInterval(id);
   }, [fetchAll]);
 
-  const robertaStats = modelMetrics?.roberta;
-  const efficientnetStats = modelMetrics?.efficientnet;
-  const clipStats = modelMetrics?.clip;
+  // REMOVED: robertaStats, efficientnetStats, clipStats - no longer needed
 
   // Filter recent predictions by category
   const filteredPredictions = recentPredictions.filter((p) => {
@@ -157,52 +154,40 @@ export default function ModelMetricsDashboard() {
       )}
 
       {/* ═══════════════════════════════════════════════
-          Row 1: Key Outcome Metrics
+          Row 1: Key Outcome Metrics - FLEXIBLE AUTO-FIT LAYOUT
           ═══════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         <ModerationOutcome data={advancedMetrics?.outcomes} />
         <PredictionVolume data={advancedMetrics?.prediction_volume} />
         <FalsePositiveIndicator data={advancedMetrics?.false_positives} />
       </div>
 
       {/* ═══════════════════════════════════════════════
-          Row 2: Performance & Latency
+          Row 2: Performance & Latency - FLEXIBLE AUTO-FIT LAYOUT
           ═══════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         <LatencyMetrics data={advancedMetrics?.latency} />
         <PipelineLatency data={advancedMetrics?.pipeline_latency} />
         <ConfidenceDistribution data={advancedMetrics?.confidence_distribution} />
       </div>
 
       {/* ═══════════════════════════════════════════════
-          Row 3: Model Cards + Confusion Matrix
+          Row 3: Confusion Matrix + Model Agreement - UPDATED LAYOUT
+          REMOVED: Text Toxicity, NSFW Detection, Image-Text Relevance cards
           ═══════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 space-y-4">
-          <ModelCard
-            title="Text Toxicity (XLM-RoBERTa)"
-            stats={robertaStats}
-            extra={
-              <span className="text-[11px] text-gray-500">
-                multilingual-toxic-xlm-roberta
-              </span>
-            }
-          />
-          <ConfusionMatrix
-            matrix={{ tn: 8452, fp: 312, fn: 287, tp: 4291 }}
-          />
-        </div>
-        <div className="space-y-4">
-          <ModelCard title="NSFW Detection (EfficientNet)" stats={efficientnetStats} />
-          <ModelCard title="Image-Text Relevance (CLIP)" stats={clipStats} />
-          <ModelAgreement data={advancedMetrics?.model_agreement} />
-        </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Confusion Matrix - now takes full column */}
+        <ConfusionMatrix
+          matrix={{ tn: 8452, fp: 312, fn: 287, tp: 4291 }}
+        />
+        {/* Model Agreement - side by side with Confusion Matrix */}
+        <ModelAgreement data={advancedMetrics?.model_agreement} />
       </div>
 
       {/* ═══════════════════════════════════════════════
-          Row 4: Detection & Patterns
+          Row 4: Detection & Patterns - FLEXIBLE AUTO-FIT LAYOUT
           ═══════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         <TopTriggerKeywords data={advancedMetrics?.top_keywords} />
         <EdgeCaseDetector data={advancedMetrics?.edge_cases} />
         <div className="space-y-4">
@@ -210,7 +195,6 @@ export default function ModelMetricsDashboard() {
           <SystemHealthCard health={systemHealth} />
         </div>
       </div>
-
       {/* ═══════════════════════════════════════════════
           Row 5: Critical Flags + Recent Predictions
           ═══════════════════════════════════════════════ */}
