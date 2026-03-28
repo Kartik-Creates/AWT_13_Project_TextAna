@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import CreatePost from "../components/CreatePost";
 import PostCard from "../components/PostCard";
-import Loader from "../components/Loader";
+import Toast from "../components/Toast";
 import postService from "../services/postService";
 
 export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore, hasMore }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [toast, setToast] = useState({ message: null, type: null });
   const sentinelRef = useRef(null);
 
   // ── Infinite scroll with IntersectionObserver ────────────────────────
@@ -28,13 +29,30 @@ export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore
   // ── Inline post creation (feed page also has a CreatePost) ──────────
   const handleSubmit = async ({ text, image }) => {
     setIsSubmitting(true);
+    setToast({ message: "Analyzing content with AI moderator...", type: "loading" });
+    
     try {
       const result = await postService.createPost({ text, image });
       if (!result.id) result.id = Date.now().toString();
+      
+      // Instant Moderation UI Feedback
+      if (result.allowed === false) {
+        setToast({ 
+          message: `Post Blocked: ${result.reasons?.join(", ") || "Community guidelines violation"}`, 
+          type: "error" 
+        });
+      } else {
+        setToast({ 
+          message: "Post Allowed and published successfully!", 
+          type: "success" 
+        });
+      }
+      
+      // Always add the post to the feed dynamically
       setPosts((prev) => [result, ...prev]);
     } catch (error) {
       console.error("Error submitting post:", error);
-      alert("Failed to process content. Make sure backend is running.");
+      setToast({ message: "Failed to process content. Make sure backend is running.", type: "error" });
     } finally {
       setIsSubmitting(false);
     }
@@ -84,7 +102,13 @@ export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore
         )}
       </div>
 
-      {isSubmitting && <Loader />}
+      {toast.message && (
+        <Toast 
+          message={toast.message} 
+          type={toast.type} 
+          onClose={() => setToast({ message: null, type: null })} 
+        />
+      )}
     </div>
   );
 }

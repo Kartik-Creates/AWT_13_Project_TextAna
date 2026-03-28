@@ -62,22 +62,28 @@ async def create_post(
         post_id = post_repository.create(post_data)
         logger.info(f"Post created with ID: {post_id}")
         
-        # Run moderation in background
-        background_tasks.add_task(
-            moderation_service.moderate_post,
+        # Run moderation synchronously for instant feedback
+        moderation_result = await moderation_service.moderate_post(
             post_id=post_id,
             text=text,
             image_path=image_path
         )
         
-        # Return immediate response
+        # Read the updated status
+        is_allowed = moderation_result.get("allowed", False)
+        
+        # Fetch the updated post from the DB so we have reasons/flagged_phrases 
+        # (Though moderation_result also returns them, let's grab the final DB state)
+        final_post = post_repository.get_by_id(post_id)
+        
+        # Return immediate response with the moderation outcome
         return {
             "id": post_id,
             "text": text,
             "image_path": image_path,
-            "allowed": None,
-            "reasons": [],
-            "flagged_phrases": [],
+            "allowed": final_post.get("allowed", is_allowed),
+            "reasons": final_post.get("reasons", []),
+            "flagged_phrases": final_post.get("flagged_phrases", []),
             "created_at": datetime.utcnow().isoformat()
         }
         

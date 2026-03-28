@@ -1,5 +1,6 @@
 import re
-from typing import List, Dict, Any, Set
+import json
+from typing import List, Dict, Any, Set, Tuple
 import logging
 
 from app.ml.text_normalizer import text_normalizer
@@ -11,6 +12,7 @@ class RuleEngine:
 
     Uses \\b word-boundary regex to avoid false positives like
     'skill' matching 'kill' or 'studied' matching 'die'.
+    Now with context analysis to distinguish harmful vs safe usage.
     """
 
     def __init__(self):
@@ -146,6 +148,8 @@ class RuleEngine:
             r'\bpainkiller(?:s)?\b',
             r'\bdie-?cast(?:ing)?\b',
             r'\bstudied\b',
+            r'\bstudies\b',
+            r'\bstudying\b',
             r'\bsoldier(?:s)?\b',
             r'\baudience(?:s)?\b',
             r'\bdie(?:sel|t|tary|titian|tetics)\b',
@@ -314,6 +318,58 @@ class RuleEngine:
             ]
         }
 
+        self.ambiguous_tech_terms = [
+            # Programming Language / Tech Names (Ambiguous)
+            "python", "java", "c", "go", "rust", "ruby", "dart", "scala", "bash", "shell", "swift", "kotlin", "julia", "crystal", "nim", "zig", "cobra", "chapel", "red", "blue", "v", "ring",
+            # Framework / Library Names
+            "react", "express", "spring", "flask", "bottle", "tornado", "phoenix", "ember", "next", "nuxt", "meteor", "catalyst", "ionic", "foundation", "backbone", "alpine",
+            # General Tech Terms with Everyday Meaning
+            "code", "script", "thread", "process", "object", "class", "method", "function", "variable", "pointer", "reference", "value", "key", "token", "block", "stack", "queue", "heap", "tree", "root", "leaf", "node", "branch",
+            # Networking / System Words
+            "port", "host", "client", "server", "request", "response", "session", "cookie", "cache", "proxy", "gateway", "bridge", "tunnel", "socket", "packet", "route",
+            # Database / Data Words
+            "table", "column", "row", "index", "query", "schema", "model", "record", "field", "keyspace", "cluster", "shard", "document",
+            # DevOps / Infra Words
+            "docker", "container", "image", "build", "deploy", "release", "pipeline", "environment", "version", "tag", "stage", "job", "runner",
+            # Security Terms
+            "hash", "salt", "key", "cipher", "token", "signature", "certificate", "vault", "secret", "breach",
+            # UI/UX Terms
+            "grid", "layout", "margin", "padding", "theme", "style", "font", "color", "shadow", "layer", "frame",
+            # Action Words
+            "run", "execute", "build", "push", "pull", "commit", "fetch", "merge", "fork", "clone", "install", "update", "upgrade", "fix", "debug", "test",
+            # Common English Words that Appear in Tech Context
+            "time", "space", "memory", "power", "control", "flow", "state", "event", "trigger", "handler", "service", "system", "platform", "tool",
+            # File / System Related
+            "file", "folder", "path", "root", "home", "temp", "log", "config", "bin", "src", "dist",
+            # AI / ML Words
+            "model", "training", "learning", "network", "neuron", "layer", "weight", "bias", "loss", "prediction",
+            # Random Overlap Words
+            "watch", "play", "drive", "store", "map", "reduce", "filter", "sort", "search", "match", "split", "join", "count", "check", "print",
+            # Extra filler
+            "running", "executed", "building", "deployed", "testing", "fixing", "merging", "pulling", "pushing", "updating", "installing",
+            "cached", "storing", "mapping", "filtering", "sorting", "searching", "matched", "splitting", "joining",
+            "configured", "configuring", "optimized", "optimizing", "scaling", "scaled",
+            "connected", "connecting", "disconnected", "handling", "handled"
+        ]
+
+        self.tech_anchors = [
+            "javascript", "typescript", "c++", "csharp", "golang", "php",
+            "function", "variable", "loop", "recursion", "syntax", "compiler", "interpreter", "runtime", "debugging", "refactor", "dependency", "module", "package",
+            "frontend", "backend", "fullstack", "api", "rest", "graphql", "endpoint", "request", "response", "middleware", "routing", "session", "cookie", "authentication", "authorization",
+            "framework", "library", "sdk", "cli", "npm", "pip", "maven", "gradle", "webpack", "vite", "babel",
+            "database", "sql", "nosql", "mongodb", "mysql", "postgresql", "redis", "schema", "query", "index", "transaction",
+            "docker", "kubernetes", "container", "deployment", "ci", "cd", "pipeline", "server", "cloud", "aws", "azure", "gcp", "nginx", "loadbalancer",
+            "encryption", "hashing", "token", "jwt", "oauth", "ssl", "tls", "firewall", "vulnerability",
+            "algorithm", "data structure", "stack", "queue", "heap", "tree", "graph", "hashmaps", "complexity", "recursion", "dp", "dynamic programming", "memory safe", "memory safety",
+            "testing", "unit test", "integration test", "testcases", "mocking", "coverage",
+            "git", "github", "gitlab", "commit", "branch", "merge", "rebase", "pull request",
+            "model", "training", "inference", "dataset", "classification", "regression", "neural network", "transformer", "embedding"
+        ]
+
+        # Clean up taxonomy by removing ambiguous terms
+        for cat in self.tech_taxonomy:
+            self.tech_taxonomy[cat] = [t for t in self.tech_taxonomy[cat] if t not in self.ambiguous_tech_terms]
+
         # ── Tech URL domains ──
         self.tech_url_patterns = [
             r'github\.com', r'gitlab\.com', r'bitbucket\.org',
@@ -358,11 +414,10 @@ class RuleEngine:
         ]
 
         # ── Off-topic sentence signals — used for mixing detection ──
-        # These are patterns that indicate a sentence is clearly personal/casual/unrelated
         self.off_topic_sentence_signals = [
             # Personal observations about animals/people
             r'\bi (?:saw|noticed|watched|found|met)\s+(?:a|an|some|my|this|the)\s+\w+',
-            r'\b(?:dog|cat|bird|monkey|elephant|cow|horse|lion|tiger)\b',
+            r'\b(?:dog|cat|bird|monkey|elephant|cow|horse|lion|tiger|snake|spider)\b',
             r'\b(?:wearing|sunglasses|outfit|clothes|dress|shirt|shoes)\b',
             r'\b(?:looked|looked like|seemed|appears|feels)\s+(?:more|so|very|really|quite)\b',
             r'\b(?:most humans|most people|everyone|everybody)\b',
@@ -377,7 +432,64 @@ class RuleEngine:
             # Motivational / quote-style
             r'\b(?:believe in yourself|stay positive|keep going|never give up|trust the process|stay patient|discipline)\b',
             r'\b(?:growth|success|failure|mindset|hustle|grind|motivation|inspire|journey)\b',
+            # Conversational
+            r"\bi (?:do not|don't|am|was)\b",
+            r"\bthis is\b",
+            r"\bi think\b",
+            r"\bwhy is\b",
         ]
+
+        # ── Weighted Scoring Lists (Hybrid Engine Upgrade) ──
+        self.strong_anchors = ["javascript", "python", "java", "api", "database", "server", "algorithm", "git"]
+        self.weak_anchors = ["system", "tool", "platform", "service", "app", "project"]
+        self.ambiguous_terms = ["react", "express", "spring", "go", "ruby", "rust"]
+        self.emotional_words = ["love", "hate", "boring", "amazing", "bad", "good", "sad", "happy"]
+        self.generic_words = ["thing", "stuff", "something", "anything"]
+
+        self.phrase_penalties = [
+            r"\bi do not\b", r"\bi don't\b", r"\bi am\b", r"\bi was\b", r"\bi feel\b", r"\bi think\b", r"\bi believe\b",
+            r"\bi guess\b", r"\bi just\b", r"\bi really\b", r"\bi love\b", r"\bi hate\b",
+            r"\bthis is\b", r"\bthat is\b", r"\bit is\b", r"\bit was\b", r"\bthere is\b", r"\bthere was\b",
+            r"\bwhy is\b", r"\bwhat is\b", r"\bhow is\b", r"\bdoes this\b", r"\bcan this\b",
+            r"\bthis is boring\b", r"\bthis is amazing\b", r"\bthis is bad\b", r"\bthis is good\b", r"\bso annoying\b", r"\bvery nice\b",
+            r"\bthis thing\b", r"\bthat thing\b", r"\bsomething\b", r"\banything\b", r"\bstuff\b",
+            r"\bi like\b", r"\bi enjoy\b", r"\bi prefer\b", r"\bi want\b", r"\bi need\b"
+        ]
+
+        self._compiled_phrase_penalties = [
+            re.compile(p, re.IGNORECASE) for p in self.phrase_penalties
+        ]
+
+        # ── Context Analysis definitions for False Positives ──
+        self.safe_words = {
+            "kill", "shoot", "execute", "bomb", "blast", "attack", "die", "dead",
+            "crack", "weed", "hash", "dump", "hook", "salt", "ice", "pot", "coke"
+        }
+        
+        self.safe_context_patterns = [
+            (r'\b(background)?\s*process(es)?\b', 'system_process'),
+            (r'\b(port|pid|task|server|app|daemon|service|thread|job)\b', 'tech_entity'),
+            (r'\b(photo|video|screen)?\s*shoot\b', 'media_production'),
+            (r'\b(code|script|query|command|file)\b', 'code_execution'),
+            (r'\b(error|bug|exception|crash)\b', 'debugging'),
+            (r'\b(password|hash|salt|encryption)\b', 'security'),
+            (r'\b(game|player|enemy|level)\b', 'gaming')
+        ]
+        
+        self.harmful_context_patterns = {
+            "violence": [
+                (r'\b(person|people|someone|anyone|everybody|him|her|them|you|myself)\b', 0.9),
+                (r'\b(school|mall|crowd|building)\b', 0.95),
+                (r'\b(blood|weapon|gun|knife)\b', 0.8),
+            ],
+            "harm": [
+                (r'\b(myself|my life|all|everything)\b', 0.9),
+                (r'\b(tired of living|want to end it|no reason)\b', 0.95),
+            ],
+            "drugs": [
+                (r'\b(buy|sell|deal|smoke|snort|inject|high|drunk)\b', 0.85),
+            ]
+        }
 
         # Compile all patterns
         self._compiled_banned = {}
@@ -421,7 +533,6 @@ class RuleEngine:
         ]
 
         # Spam patterns
-        # Note: [A-Z]{12,} is removed because re.IGNORECASE makes it match any word with 12+ letters
         self.spam_patterns = [
             r'(.)\1{5,}',
             r'\b(viagra|casino|lottery|winner|congratulations|prize|won\s+\d+|\$\d+[kKmM]|\d+[kKmM]\$)\b',
@@ -431,6 +542,105 @@ class RuleEngine:
 
         self.url_regex = re.compile('|'.join(self.url_patterns), re.IGNORECASE)
         self.spam_regex = re.compile('|'.join(self.spam_patterns), re.IGNORECASE)
+        
+        logger.info("✅ Rule Engine initialized with enhanced context awareness (Hybrid & Context Analysis)")
+
+    def _analyze_context(self, text: str, matched_word: str, category: str) -> Dict[str, Any]:
+        """
+        Analyze context around a matched word to determine if usage is harmful.
+        """
+        text_lower = text.lower()
+        
+        # First check if the matched word itself is in safe words list
+        if matched_word.lower() in self.safe_words:
+            return {
+                'is_harmful': False,
+                'confidence': 0.95,
+                'context_type': 'safe_word',
+                'reasoning': f"'{matched_word}' is in safe words list"
+            }
+        
+        # Step 1: Check for safe contexts first (override)
+        for pattern, context_type in self.safe_context_patterns:
+            match = re.search(pattern, text_lower, re.IGNORECASE)
+            if match:
+                # Get surrounding context (30 chars before and after)
+                start = max(0, match.start() - 30)
+                end = min(len(text_lower), match.end() + 30)
+                context = text_lower[start:end]
+                
+                if matched_word.lower() in context:
+                    return {
+                        'is_harmful': False,
+                        'confidence': 0.9,
+                        'context_type': context_type,
+                        'reasoning': f"Found in safe {context_type} context"
+                    }
+        
+        # Step 2: Check for harmful contexts
+        for harm_category, patterns in self.harmful_context_patterns.items():
+            for pattern, weight in patterns:
+                match = re.search(pattern, text_lower, re.IGNORECASE)
+                if match:
+                    start = max(0, match.start() - 30)
+                    end = min(len(text_lower), match.end() + 30)
+                    context = text_lower[start:end]
+                    
+                    if matched_word.lower() in context:
+                        return {
+                            'is_harmful': True,
+                            'confidence': weight,
+                            'context_type': harm_category,
+                            'reasoning': f"Found in harmful {harm_category} context"
+                        }
+        
+        # Step 3: Check surrounding words for educational context
+        words = text_lower.split()
+        for i, word in enumerate(words):
+            if matched_word.lower() in word:
+                start = max(0, i - 5)
+                end = min(len(words), i + 6)
+                surrounding = words[start:end]
+                
+                # Educational verbs indicate safe usage
+                educational_verbs = ['learn', 'study', 'practice', 'master', 'develop', 'improve', 'build', 'create']
+                if any(verb in surrounding for verb in educational_verbs):
+                    return {
+                        'is_harmful': False,
+                        'confidence': 0.85,
+                        'context_type': 'educational',
+                        'reasoning': f"Found near educational verbs"
+                    }
+                
+                # Harmful personal pronouns with harmful verbs
+                harmful_pronouns = ['i', 'me', 'myself', 'you', 'yourself']
+                harmful_verbs = ['want', 'need', 'will', 'going', 'plan', 'threat']
+                if any(pronoun in surrounding for pronoun in harmful_pronouns):
+                    if any(verb in surrounding for verb in harmful_verbs):
+                        return {
+                            'is_harmful': True,
+                            'confidence': 0.8,
+                            'context_type': 'personal_threat',
+                            'reasoning': f"Personal context with harmful intent"
+                        }
+        
+        # Step 4: Default based on category
+        # If it's in violence/harm category but no harmful context, default to suspicious
+        if category in ["violence", "harm"]:
+            return {
+                'is_harmful': True,
+                'confidence': 0.6,
+                'context_type': 'neutral_but_risky',
+                'reasoning': f"Category '{category}' default to suspicious if no explicit safe context found."
+            }
+        
+        # Default to suspicious (fail-safe)
+        return {
+            'is_harmful': True,
+            'confidence': 0.5,
+            'context_type': 'unknown',
+            'reasoning': "No clear context, defaulting to suspicious"
+        }
 
     def normalize_text(self, text: str) -> str:
         """Normalize text to catch leetspeak and variations."""
@@ -447,7 +657,7 @@ class RuleEngine:
         return normalized
 
     # ──────────────────────────────────────────────────────────
-    #  Sentence-level mixing detection  ← NEW
+    #  Sentence-level mixing detection
     # ──────────────────────────────────────────────────────────
 
     def _split_sentences(self, text: str) -> List[str]:
@@ -565,15 +775,11 @@ class RuleEngine:
         }
 
     # ──────────────────────────────────────────────────────────
-    #  Tech relevance scoring
+    #  Tech relevance scoring (Hybrid Model)
     # ──────────────────────────────────────────────────────────
 
     def check_tech_relevance(self, text: str) -> Dict[str, Any]:
-        """Score how tech-relevant a post is.
-
-        Now includes sentence-level mixing detection to catch posts
-        that inject off-topic content between tech sentences.
-        """
+        """Score how tech-relevant a post is using the new Hybrid Weighted Scoring system."""
         if not text or not text.strip():
             return {
                 "tech_relevance_score": 0.0,
@@ -581,136 +787,152 @@ class RuleEngine:
                 "matched_categories": [],
                 "matched_terms": [],
                 "non_tech_signals": [],
-                "mixing": {"mixing_detected": False},
+                "mixing": {"mixing_detected": False, "off_topic_sentences": [], "tech_sentence_count": 0, "total_sentences": 0, "mixing_penalty": 0.0},
                 "details": {}
             }
 
         text_lower = text.lower()
         words = text_lower.split()
-        total_words = max(len(words), 1)
 
-        # ── 1. Taxonomy term matching ──
-        category_hits: Dict[str, List[str]] = {}
-        all_matched_terms: List[str] = []
+        # ── 1. Match terms ──
+        strong_anchors_found = set()
+        weak_anchors_found = set()
+        ambiguous_terms_found = set()
+        emotional_matches = set()
+        generic_matches = set()
+        phrase_matches = set()
 
-        for category, terms in self.tech_taxonomy.items():
-            hits = []
-            for term in terms:
-                if ' ' in term:
-                    if term in text_lower:
-                        hits.append(term)
-                else:
-                    if re.search(rf'\b{re.escape(term)}\b', text_lower):
-                        hits.append(term)
-            if hits:
-                category_hits[category] = hits
-                all_matched_terms.extend(hits)
+        # Check strong anchors (user list + existing specific tech_anchors)
+        combined_strong = self.strong_anchors + self.tech_anchors
+        for w in set(combined_strong):
+            if re.search(rf'\b{re.escape(w)}\b', text_lower) if ' ' not in w else w in text_lower:
+                strong_anchors_found.add(w)
 
-        unique_terms      = len(set(all_matched_terms))
-        unique_categories = len(category_hits)
+        # Check legacy taxonomy as strong anchors if not weak/ambiguous
+        category_hits = []
+        all_legacy_hits = []
+        for cat, terms in self.tech_taxonomy.items():
+            for w in terms:
+                if re.search(rf'\b{re.escape(w)}\b', text_lower) if ' ' not in w else w in text_lower:
+                    category_hits.append(cat)
+                    all_legacy_hits.append(w)
+                    if w not in self.weak_anchors and w not in self.ambiguous_terms:
+                        strong_anchors_found.add(w)
 
-        # ── 2. Tech URL bonus ──
-        tech_url_bonus = 0.0
-        for pattern in self._compiled_tech_urls:
-            if pattern.search(text):
-                tech_url_bonus = 0.2
-                break
+        # Check weak anchors
+        for w in self.weak_anchors:
+            if re.search(rf'\b{re.escape(w)}\b', text_lower) if ' ' not in w else w in text_lower:
+                weak_anchors_found.add(w)
 
-        # ── 3. Code signal bonus ──
-        code_bonus = 0.0
-        for pattern in self._compiled_code_signals:
-            if pattern.search(text):
-                code_bonus = min(code_bonus + 0.05, 0.25)
+        # Check ambiguous
+        for w in self.ambiguous_terms:
+            if re.search(rf'\b{re.escape(w)}\b', text_lower) if ' ' not in w else w in text_lower:
+                ambiguous_terms_found.add(w)
 
-        # ── 4. Non-tech signal penalty (whole-post level) ──
-        non_tech_penalty = 0.0
-        matched_non_tech: List[str] = []
-        for pattern in self._compiled_non_tech:
+        # Check negative signals
+        for w in self.emotional_words:
+            if re.search(rf'\b{re.escape(w)}\b', text_lower) if ' ' not in w else w in text_lower:
+                emotional_matches.add(w)
+        for w in self.generic_words:
+            if re.search(rf'\b{re.escape(w)}\b', text_lower) if ' ' not in w else w in text_lower:
+                generic_matches.add(w)
+        for pattern in self._compiled_phrase_penalties:
             m = pattern.search(text_lower)
             if m:
-                matched_non_tech.append(m.group())
-                non_tech_penalty = min(non_tech_penalty + 0.12, 0.35)
+                phrase_matches.add(m.group())
+        for pattern in self._compiled_off_topic_sentence:
+            m = pattern.search(text_lower)
+            if m:
+                phrase_matches.add(m.group())
 
-        # ── 5. Base score ──
-        if unique_terms == 0:
-            base_score = 0.0
-        elif unique_terms == 1:
-            base_score = 0.40
-        elif unique_terms == 2:
-            base_score = 0.52
-        elif unique_terms <= 4:
-            base_score = 0.65
-        elif unique_terms <= 7:
-            base_score = 0.78
-        else:
-            base_score = 0.90
+        # ── 2. Weighted Scoring Calculation ──
+        score = 0
+        penalties_applied = {}
+        validated_ambiguous_terms = []
 
-        if unique_categories >= 3:
-            base_score = min(base_score + 0.10, 1.0)
-        elif unique_categories == 2:
-            base_score = min(base_score + 0.05, 1.0)
+        # Strong Anchors (+3)
+        if strong_anchors_found:
+            score += 3 * len(strong_anchors_found)
+            
+        # Legacy bonuses
+        for pattern in self._compiled_tech_urls:
+            if pattern.search(text):
+                strong_anchors_found.add("tech_url")
+                score += 3
+                break
+        for pattern in self._compiled_code_signals:
+            if pattern.search(text):
+                strong_anchors_found.add("code_snippet")
+                score += 3
+                break
 
-        density = (unique_terms / total_words) * 100
-        if density > 8:
-            base_score = min(base_score + 0.10, 1.0)
-        elif density > 4:
-            base_score = min(base_score + 0.05, 1.0)
+        # Weak Anchors (+1)
+        if weak_anchors_found:
+            score += 1 * len(weak_anchors_found)
 
-        # ── 6. Sentence-level mixing detection ──  NEW
+        # Ambiguous Terms Logic
+        for term in ambiguous_terms_found:
+            if strong_anchors_found:
+                score += 2
+                validated_ambiguous_terms.append(f"{term} (+2)")
+            elif weak_anchors_found:
+                score += 1
+                validated_ambiguous_terms.append(f"{term} (+1)")
+            else:
+                validated_ambiguous_terms.append(f"{term} (ignored)")
+
+        # Negative Signals
+        if phrase_matches:
+            penalty = 2 * len(phrase_matches)
+            score -= penalty
+            penalties_applied["phrase_penalties"] = -penalty
+        if emotional_matches:
+            penalty = 2 * len(emotional_matches)
+            score -= penalty
+            penalties_applied["emotional_words"] = -penalty
+        if generic_matches:
+            penalty = 2 * len(generic_matches)
+            score -= penalty
+            penalties_applied["generic_words"] = -penalty
+
+        # Old mixing detection
         mixing = self._detect_content_mixing(text)
-        mixing_penalty = mixing["mixing_penalty"]
-
         if mixing["mixing_detected"]:
-            logger.warning(
-                f"🔀 Content mixing detected: "
-                f"{len(mixing['off_topic_sentences'])} off-topic sentence(s) "
-                f"in {mixing['total_sentences']} total. "
-                f"Penalty: -{mixing_penalty:.2f}"
-            )
+            score -= 3
+            penalties_applied["content_mixing"] = -3
 
-        # ── 7. Final score — mixing penalty applied last ──
-        final_score = base_score + tech_url_bonus + code_bonus - non_tech_penalty - mixing_penalty
-        final_score = round(max(0.0, min(1.0, final_score)), 3)
+        # ── 3. Final Decision ──
+        zone = "tech" if score > 0 else "off_topic"
 
-        # ── 8. Zone ──
-        if final_score >= 0.38:
-            zone = "tech"
-        elif final_score >= 0.20:
-            zone = "review"
-        else:
-            zone = "off_topic"
-
-        result = {
-            "tech_relevance_score": final_score,
-            "zone": zone,
-            "matched_categories": list(category_hits.keys()),
-            "matched_terms": list(set(all_matched_terms))[:15],
-            "non_tech_signals": matched_non_tech,
-            "mixing": {
-                "mixing_detected":      mixing["mixing_detected"],
-                "off_topic_sentences":  mixing["off_topic_sentences"],
-                "tech_sentence_count":  len(mixing["tech_sentences"]),
-                "total_sentences":      mixing["total_sentences"],
-                "mixing_penalty":       mixing_penalty,
-            },
-            "details": {
-                "base_score":        round(base_score, 3),
-                "tech_url_bonus":    tech_url_bonus,
-                "code_bonus":        round(code_bonus, 3),
-                "non_tech_penalty":  round(non_tech_penalty, 3),
-                "mixing_penalty":    round(mixing_penalty, 3),
-                "unique_terms":      unique_terms,
-                "unique_categories": unique_categories,
-                "density_pct":       round(density, 2),
-            }
+        # ── 4. Debug Logging ──
+        details = {
+            "original_text": text,
+            "tokens_detected": len(words),
+            "strong_anchors_found": list(strong_anchors_found),
+            "weak_anchors_found": list(weak_anchors_found),
+            "ambiguous_terms_found": list(ambiguous_terms_found),
+            "validated_ambiguous_terms": validated_ambiguous_terms,
+            "phrase_matches": list(phrase_matches),
+            "emotional_matches": list(emotional_matches),
+            "generic_matches": list(generic_matches),
+            "penalties_applied": penalties_applied,
+            "final_score": score,
+            "final_decision": zone
         }
 
-        logger.info(
-            f"🔍 Tech relevance: score={final_score:.3f}, zone={zone}, "
-            f"terms={unique_terms}, mixing={mixing['mixing_detected']}, "
-            f"categories={list(category_hits.keys())}"
-        )
+        # Keep output structure so we don't break existing services
+        result = {
+            "tech_relevance_score": float(score),
+            "zone": zone,
+            "matched_categories": list(set(category_hits)),
+            "matched_terms": list(strong_anchors_found) + list(ambiguous_terms_found) + list(weak_anchors_found),
+            "non_tech_signals": list(phrase_matches) + list(emotional_matches) + list(generic_matches),
+            "mixing": mixing,
+            "details": details
+        }
 
+        logger.info(f"Hybrid Relevance Engine Debug Logs:\n{json.dumps(details)}")
+        
         return result
 
     # ──────────────────────────────────────────────────────────
@@ -718,7 +940,7 @@ class RuleEngine:
     # ──────────────────────────────────────────────────────────
 
     def check_rules(self, text: str) -> Dict[str, Any]:
-        """Check text against all harm rules."""
+        """Check text against all harm rules. Now uses context filtering."""
         text_stripped = text.strip()
         normalized    = self.normalize_text(text_stripped)
 
@@ -744,17 +966,23 @@ class RuleEngine:
         for pattern in self._compiled_allowlist:
             masked_normalized = pattern.sub(lambda m: '_' * len(m.group()), masked_normalized)
 
-        # ── Step 1: Banned keywords ──
+        # ── Step 1: Banned keywords (Context Analyzed) ──
         for pattern, (keyword, category) in self._compiled_banned.items():
             if pattern.search(masked_text) or pattern.search(masked_normalized):
-                results["banned_keywords"].append(keyword)
-                results["keyword_categories"].append(category)
-                results["violations"].append(f"keyword:{keyword}")
+                # Apply Context Analysis here to filter false positives
+                context_result = self._analyze_context(text_stripped, keyword, category)
+                if context_result['is_harmful']:
+                    results["banned_keywords"].append(keyword)
+                    results["keyword_categories"].append(category)
+                    results["violations"].append(f"keyword:{keyword}")
+                else:
+                    logger.debug(f"Context analysis overridden for '{keyword}': {context_result['reasoning']}")
 
-        # ── Step 2: Hindi galis ──
+        # ── Step 2: Hindi galis (Not Context Analyzed yet) ──
         hindi_matched = []
         for pattern, category in self._compiled_hindi:
             if pattern.search(masked_text) or pattern.search(masked_normalized):
+                # Hindi galis are almost always harmful, bypass context for now
                 hindi_matched.append(category)
                 if category not in results["keyword_categories"]:
                     results["keyword_categories"].append(category)
@@ -810,6 +1038,8 @@ class RuleEngine:
         elif unique_violations == 2:
             if any(cat in ["violence", "harm", "sexual"] for cat in results["keyword_categories"]):
                 results["rule_score"] = 0.7
+            elif "spam" in results["violations"]:
+                results["rule_score"] = 0.3
             else:
                 results["rule_score"] = 0.4
         else:

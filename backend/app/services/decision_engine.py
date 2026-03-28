@@ -92,7 +92,7 @@ class DecisionEngine:
         tech_score = inputs.get('tech_relevance_score', inputs.get('text_score', 0))
         tech_zone  = inputs.get('tech_zone', self._infer_zone(tech_score))
 
-        if tech_zone == "off_topic":
+        if tech_zone == "off_topic" and not inputs.get('is_image_only', False):
             logger.warning(f"❌ BLOCKING — off-topic: tech_score={tech_score:.3f}")
             return {
                 "allowed": False, "reasons": ["off_topic"],
