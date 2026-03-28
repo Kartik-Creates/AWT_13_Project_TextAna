@@ -3,7 +3,7 @@ Multi-Model Ensemble for Complete Moderation.
 
 Uses real HuggingFace models for toxicity + hate speech,
 keyword detection for other harm categories, and integrates
-with RuleEngine.check_tech_relevance() for accurate tech scoring.
+with semantic analyzer for context-aware tech scoring.
 """
 
 import torch
@@ -12,8 +12,7 @@ from transformers import pipeline
 from typing import Dict, List, Optional, Any
 import time
 
-# Import your model loader
-from app.ml.model_loader import model_loader
+from app.ml.semantic_analyzer import get_semantic_analyzer
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +25,19 @@ class EnsembleModerator:
       - Hate-speech-CNERG/dehatebert → hate speech
       - Keyword lists                → sexual, self-harm, drugs, violence, threats
 
-    IMPORTANT — keyword list design rules:
-      - Every keyword must be specific enough that it CANNOT appear in a
-        normal tech/business sentence without indicating real harm.
-      - Generic words like "strong", "score", "hit", "pain", "medication",
-        "anxiety", "pills" are BANNED from these lists — they cause false
-        positives on tech content (e.g. "strong backend", "high score").
-      - Multi-word phrases are always preferred over single words.
-
     Tech relevance:
-      - Delegates to RuleEngine.check_tech_relevance() for authoritative scoring
-      - Falls back to weighted keyword density if RuleEngine is unavailable
+      - PRIMARY: Semantic analyzer (sentence transformers) — understands context
+      - FALLBACK: RuleEngine.check_tech_relevance() — keyword-based
+      - FINAL FALLBACK: Weighted keyword density
     """
 
     def __init__(self, device: torch.device):
         self.device = device
+
+        # ── Semantic Analyzer (for tech relevance) ──
+        logger.info("🔄 Loading semantic analyzer for context-aware tech detection...")
+        self.semantic_analyzer = get_semantic_analyzer()
+        logger.info("✅ Semantic analyzer loaded")
 
         # ── Model 1: Toxicity ──
         logger.info("🔄 Loading toxicity model (unitary/toxic-bert)...")
@@ -105,9 +102,6 @@ class EnsembleModerator:
 
         self.drug_keywords = [
             # Must be specific to illegal drug dealing/use context
-            # REMOVED: 'strong', 'score', 'hit fast', 'pain relief', 'anxiety',
-            #          'pills', 'medication', 'shipment', 'xan', 'perc', 'oxy'
-            #          — all too generic and cause false positives on tech content
             'white powder for sale', 'nose candy', 'h3r0in', 'her0in',
             'fentanyl for sale', 'fent plug', 'plug for kush',
             'xannies for sale', 'bars for sale', 'pressed pills',
@@ -121,7 +115,6 @@ class EnsembleModerator:
 
         self.violence_keywords = [
             # Must be direct, specific threats — not general frustration
-            # REMOVED: 'pain', 'blood', 'die', 'handle', 'piece', 'tool' — too generic
             'i will kill you', "i'm going to kill you", 'gonna kill you',
             'i will murder you', 'going to murder',
             'beat you to death', 'beat you up badly',
@@ -135,7 +128,6 @@ class EnsembleModerator:
 
         self.threat_keywords = [
             # Must be explicit personal threats — not general expressions
-            # REMOVED: 'pain', 'revenge', 'regret', 'remember this' — too generic
             'coming for you tonight', 'i know where you live',
             'watch your back or', 'last warning or else',
             'wait outside your house', 'wait outside your school',
@@ -146,7 +138,7 @@ class EnsembleModerator:
             'next time i see you',
         ]
 
-        # Fallback tech keywords used ONLY when RuleEngine is unavailable
+        # Fallback tech keywords used ONLY when semantic analyzer fails
         self._fallback_tech_keywords = [
             'python', 'javascript', 'typescript', 'react', 'vue', 'angular',
             'docker', 'kubernetes', 'aws', 'azure', 'gcp',
@@ -166,29 +158,43 @@ class EnsembleModerator:
             'security', 'encryption', 'authentication', 'user experience',
         ]
 
-        # Lazy-load RuleEngine for authoritative tech scoring
+        # Lazy-load RuleEngine as fallback for tech scoring
         self._rule_engine = self._load_rule_engine()
 
     def _load_rule_engine(self):
-        """Try to import and return a RuleEngine instance for tech scoring."""
+        """Try to import and return a RuleEngine instance for fallback tech scoring."""
         try:
             from app.services.rule_engine import RuleEngine
             engine = RuleEngine()
-            logger.info("✅ RuleEngine loaded into EnsembleModerator for tech scoring")
+            logger.info("✅ RuleEngine loaded as fallback for tech scoring")
             return engine
         except Exception as e:
-            logger.warning(
-                f"⚠️  Could not load RuleEngine ({e}). "
-                "Using fallback keyword-based tech scoring."
-            )
+            logger.warning(f"⚠️ Could not load RuleEngine ({e})")
             return None
 
     # ──────────────────────────────────────────────────────────
-    #  Tech Relevance Scoring
+    #  Tech Relevance Scoring (PRIMARY: Semantic)
     # ──────────────────────────────────────────────────────────
 
     def _score_tech_relevance(self, text: str) -> Dict[str, Any]:
-        """Return tech relevance score and zone."""
+        """Return tech relevance score using semantic understanding (primary)."""
+        
+        # PRIMARY: Semantic analyzer (understands context)
+        try:
+            result = self.semantic_analyzer.analyze_tech_relevance(text)
+            return {
+                "score": result["score"],
+                "zone": result["zone"],
+                "matched_categories": [],
+                "matched_terms": [],
+                "source": "semantic",
+                "tech_sim": result.get("tech_sim", 0),
+                "offtopic_sim": result.get("offtopic_sim", 0),
+            }
+        except Exception as e:
+            logger.warning(f"⚠️ Semantic analyzer failed: {e}, using fallback")
+
+        # FALLBACK 1: RuleEngine (keyword-based)
         if self._rule_engine is not None:
             try:
                 result = self._rule_engine.check_tech_relevance(text)
@@ -200,9 +206,9 @@ class EnsembleModerator:
                     "source": "rule_engine",
                 }
             except Exception as e:
-                logger.warning(f"RuleEngine tech scoring failed ({e}), using fallback")
+                logger.warning(f"⚠️ RuleEngine failed: {e}, using final fallback")
 
-        # Fallback: weighted keyword density
+        # FALLBACK 2: Weighted keyword density
         text_lower = text.lower()
         word_count = max(len(text_lower.split()), 1)
         matches = sum(1 for kw in self._fallback_tech_keywords if kw in text_lower)
@@ -233,6 +239,7 @@ class EnsembleModerator:
         Single-word keywords use word-boundary matching to avoid
         matching substrings. Multi-word keywords use substring match.
         """
+        import re
         for keyword in keywords:
             if ' ' in keyword:
                 # Multi-word phrase: substring match
@@ -240,7 +247,6 @@ class EnsembleModerator:
                     return True
             else:
                 # Single word: require word boundary
-                import re
                 if re.search(rf'\b{re.escape(keyword)}\b', text_lower):
                     return True
         return False
@@ -334,7 +340,7 @@ class EnsembleModerator:
             if 'threats' not in flagged:
                 flagged.append('threats')
 
-        # ── 9. Tech relevance ──
+        # ── 9. Tech relevance (USING SEMANTIC ANALYZER) ──
         tech = self._score_tech_relevance(text)
         scores['tech_relevance'] = tech['score']
 
@@ -357,6 +363,7 @@ class EnsembleModerator:
             'tech_matched_categories': tech.get('matched_categories', []),
             'primary_category': primary,
             'processing_time_ms': elapsed_ms,
+            'tech_source': tech.get('source', 'unknown'),
         }
 
     def analyze_batch(self, texts: List[str], batch_size: int = 8) -> List[Dict[str, Any]]:
@@ -430,7 +437,7 @@ class FallbackModerator:
             logger.info("✅ RuleEngine loaded into FallbackModerator")
             return engine
         except Exception as e:
-            logger.warning(f"⚠️  Could not load RuleEngine in FallbackModerator: {e}")
+            logger.warning(f"⚠️ Could not load RuleEngine in FallbackModerator: {e}")
             return None
 
     def _score_tech_relevance(self, text: str) -> Dict[str, Any]:
@@ -516,7 +523,7 @@ def get_multitask_moderator(device: Optional[torch.device] = None) -> Any:
             logger.info("✅ EnsembleModerator ready")
         except Exception as e:
             logger.error(f"Failed to create EnsembleModerator: {e}")
-            logger.info("⚠️  Falling back to FallbackModerator")
+            logger.info("⚠️ Falling back to FallbackModerator")
             _model = _fallback
     return _model
 
@@ -527,30 +534,34 @@ def get_multitask_moderator(device: Optional[torch.device] = None) -> Any:
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("TESTING MODERATION ENSEMBLE")
+    print("TESTING MODERATION ENSEMBLE (with Semantic Analyzer)")
     print("=" * 60)
 
     model = get_multitask_moderator(torch.device('cpu'))
 
     test_texts = [
-        # Should ALLOW
-        "User experience defines the success of any application. Fast loading, smooth interactions, and intuitive design keep users engaged. Combining frontend performance with strong backend systems creates powerful and reliable digital products.",
+        # Should ALLOW (tech content)
+        "User experience defines the success of any application. Fast loading, smooth interactions, and intuitive design keep users engaged.",
         "Just deployed my FastAPI app on Kubernetes using Helm charts!",
-        "Security in tech applications is critical. Protecting user data through encryption, authentication, and secure APIs ensures trust.",
-        "Real-time communication using WebSockets and event-driven systems makes instant messaging possible.",
         "Python + React + Docker — my go-to stack for every new project.",
-        # Should BLOCK
+        # Edge cases that keyword matching gets wrong
+        "python, today is sunny",  # Should be LOW tech score
+        "I love programming in my free time",  # Should be HIGH tech score
+        # Should BLOCK (harmful)
         "I will kill you tonight",
         "buy cocaine from my drug plug",
         "send nudes or i'll share your photos",
         "i want to kill myself, no reason to live",
+        # Should BLOCK (off-topic)
         "I love watching cricket with my family every evening.",
+        "Going to the beach with friends this weekend.",
     ]
 
     for text in test_texts:
         print(f"\n📝 Text: {text[:80]}")
         result = model.analyze(text)
         print(f"   Tech zone : {result['tech_zone']} (score={result['tech_relevance_score']:.3f})")
+        print(f"   Source    : {result.get('tech_source', 'unknown')}")
         print(f"   Harmful   : {result['is_harmful']} — {result['primary_category']}")
         for category, score in result['scores'].items():
             if score > 0.3:

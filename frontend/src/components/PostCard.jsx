@@ -48,7 +48,9 @@ export default function PostCard({ post }) {
 
           {/* Image — backend sends image_path */}
           {post.image_path && (
-            <div className="mt-3 rounded-2xl overflow-hidden border border-gray-100 mb-3 bg-gray-50 max-h-[400px]">
+            <div className={`mt-3 rounded-2xl overflow-hidden border mb-3 bg-gray-50 max-h-[400px] transition-all ${
+              isAllowed === false ? "border-rose-100" : "border-gray-100"
+            }`}>
               <img 
                 src={`http://localhost:8000${post.image_path.startsWith('/uploads') ? post.image_path : '/uploads' + (post.image_path.startsWith('/') ? '' : '/') + post.image_path}`}
                 alt="Post content" 

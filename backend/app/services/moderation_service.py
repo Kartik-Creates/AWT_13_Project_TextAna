@@ -173,29 +173,94 @@ class ModerationService:
  
     Pipeline:
       1. Rule-based harm checks (keywords / URLs / spam)
-      2. Tech relevance scoring                          ← NEW
-      3. Early exit for clear rule violations
-      4. ML text toxicity analysis
-      5. NSFW image detection
-      6. Image-text relevance (CLIP)
-      7. Decision engine (combines all signals)
-      8. Explanation builder
-      9. DB update + metrics
+      2. Tech relevance scoring
+      3. Image analysis (NSFW + CLIP) - ALWAYS RUNS FOR IMAGES
+      4. Early exits for rule violations
+      5. Auto-allow for high-quality tech content (after image checks)
+      6. ML text toxicity analysis for borderline cases
+      7. Decision engine & Explanation
+      8. DB update + metrics
  
     Error policy: FAIL-CLOSED — crashes reject the post, not approve it.
     """
  
+    # Define allowed categories that should bypass off-topic blocking
+    ALLOWED_TECH_CATEGORIES = ['general_tech', 'ai_tech', 'gaming', 'hardware', 'software_dev']
+    TECH_SCORE_THRESHOLD = 0.5  # Posts with tech score above this should be allowed even if marked needs_review
+    NSFW_THRESHOLD = 0.7  # Threshold for blocking NSFW content
+    CLIP_SIMILARITY_THRESHOLD = 0.25  # Threshold for image-text relevance
+
     def __init__(self):
         self.rule_engine = RuleEngine()
         self.text_processor = TextProcessor()
         self.decision_engine = DecisionEngine()
         self.explanation_builder = ExplanationBuilder()
         logger.info("✅ Moderation service initialized")
+        logger.info(f"📋 Allowed tech categories: {self.ALLOWED_TECH_CATEGORIES}")
+        logger.info(f"📊 Tech score threshold for auto-approval: {self.TECH_SCORE_THRESHOLD}")
+        logger.info(f"🚫 NSFW threshold: {self.NSFW_THRESHOLD}")
+        logger.info(f"🔗 CLIP similarity threshold: {self.CLIP_SIMILARITY_THRESHOLD}")
  
     async def _run_sync(self, func, *args):
         """Run blocking ML calls in a thread pool."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, func, *args)
+ 
+    async def _analyze_image(self, image_path: str, text: str) -> Dict[str, Any]:
+        """Run image analysis (NSFW + CLIP) for a given image."""
+        results = {
+            "image_analysis": None,
+            "relevance_analysis": None,
+            "nsfw_score": 0.0,
+            "clip_similarity": None,
+            "mismatch_detected": False
+        }
+        
+        if not image_path:
+            return results
+            
+        clean_path = image_path.lstrip('/')
+        full_image_path = os.path.normpath(clean_path)
+        
+        if not os.path.exists(full_image_path):
+            logger.warning(f"⚠️  Image file not found: {full_image_path}")
+            return results
+        
+        # Run NSFW detection
+        try:
+            nsfw_results = await self._run_sync(nsfw_detector.analyze, full_image_path)
+            logger.info(
+                f"🖼️  NSFW — prob={nsfw_results.get('nsfw_probability', 0):.4f}, "
+                f"is_nsfw={nsfw_results.get('is_nsfw')}"
+            )
+            results["image_analysis"] = nsfw_results
+            results["nsfw_score"] = nsfw_results.get('nsfw_probability', 0)
+        except Exception as e:
+            logger.error(f"NSFW analysis failed: {e}")
+            results["nsfw_score"] = 0.6
+            results["image_analysis"] = {
+                "nsfw_probability": 0.6,
+                "is_nsfw": False,
+                "primary_category": "analysis_failed",
+                "explicit_content_detected": False,
+                "using_fallback": True,
+            }
+        
+        # Run CLIP relevance analysis if there's text
+        if text and len(text.strip()) > 0:
+            try:
+                clip_results = await self._run_sync(clip_analyzer.analyze, text, full_image_path)
+                logger.info(
+                    f"🔄 CLIP — similarity={clip_results.get('similarity_score', 0):.4f}, "
+                    f"is_relevant={clip_results.get('is_relevant', False)}"
+                )
+                results["relevance_analysis"] = clip_results
+                results["clip_similarity"] = clip_results.get('similarity_score')
+                results["mismatch_detected"] = clip_results.get('mismatch_detected', False)
+            except Exception as e:
+                logger.error(f"CLIP analysis failed: {e}")
+        
+        return results
  
     async def _record_metrics(self, post_id: str, text: str, results: Dict[str, Any]) -> None:
         """Best-effort background metrics recording (non-blocking)."""
@@ -399,16 +464,19 @@ class ModerationService:
                 logger.warning(f"   Hindi abuse: {rule_results.get('hindi_detection', {}).get('matched_words')}")
  
             # ── Step 2: Tech relevance scoring ──
-            tech_relevance = self.rule_engine.check_tech_relevance(text)
+            tech_relevance = self.rule_engine.check_tech_relevance(text) if text else {"tech_relevance_score": 0, "zone": "off_topic", "matched_categories": []}
+            tech_score = tech_relevance.get('tech_relevance_score', 0)
+            tech_zone = tech_relevance.get('zone', 'off_topic')
+            matched_categories = tech_relevance.get('matched_categories', [])
  
             logger.info(
-                f"🔍 Tech relevance — score={tech_relevance['tech_relevance_score']:.3f}, "
-                f"zone={tech_relevance['zone']}, "
-                f"categories={tech_relevance['matched_categories']}"
+                f"🔍 Tech relevance — score={tech_score:.3f}, "
+                f"zone={tech_zone}, "
+                f"categories={matched_categories}"
             )
  
             # ── Step 2b: URL extraction ──
-            urls = url_extractor.extract_urls(text)
+            urls = url_extractor.extract_urls(text) if text else []
             suspicious_urls = [
                 u for u in urls
                 if u.get("risk_level") in ("MEDIUM", "HIGH")
@@ -419,25 +487,26 @@ class ModerationService:
             # ── Step 2c: Advanced cyber-harm & intent filters ──
             tech_ctx_result = {}
             intent_result   = {}
-            try:
-                tech_ctx_result = await self._run_sync(get_tech_context_filter().analyze, text)
-                logger.info(
-                    f"🛡️  TechContextFilter — harmful={tech_ctx_result.get('is_harmful')}, "
-                    f"category={tech_ctx_result.get('category')}, "
-                    f"confidence={tech_ctx_result.get('confidence', 0):.3f}"
-                )
-            except Exception as e:
-                logger.error(f"TechContextFilter failed: {e}", exc_info=True)
- 
-            try:
-                intent_result = await self._run_sync(get_intent_entity_filter().analyze, text)
-                logger.info(
-                    f"🔎 IntentEntityFilter — harmful={intent_result.get('is_harmful')}, "
-                    f"category={intent_result.get('category')}, "
-                    f"confidence={intent_result.get('confidence', 0):.3f}"
-                )
-            except Exception as e:
-                logger.error(f"IntentEntityFilter failed: {e}", exc_info=True)
+            if text:
+                try:
+                    tech_ctx_result = await self._run_sync(get_tech_context_filter().analyze, text)
+                    logger.info(
+                        f"🛡️  TechContextFilter — harmful={tech_ctx_result.get('is_harmful')}, "
+                        f"category={tech_ctx_result.get('category')}, "
+                        f"confidence={tech_ctx_result.get('confidence', 0):.3f}"
+                    )
+                except Exception as e:
+                    logger.error(f"TechContextFilter failed: {e}", exc_info=True)
+    
+                try:
+                    intent_result = await self._run_sync(get_intent_entity_filter().analyze, text)
+                    logger.info(
+                        f"🔎 IntentEntityFilter — harmful={intent_result.get('is_harmful')}, "
+                        f"category={intent_result.get('category')}, "
+                        f"confidence={intent_result.get('confidence', 0):.3f}"
+                    )
+                except Exception as e:
+                    logger.error(f"IntentEntityFilter failed: {e}", exc_info=True)
  
             # Derive composite cyber-harm signal for decision engine
             tcf_score = tech_ctx_result.get('confidence', 0.0) if tech_ctx_result.get('is_harmful') else 0.0
@@ -449,7 +518,21 @@ class ModerationService:
             )
             content_mixing_detected = tech_relevance.get('mixing', {}).get('mixing_detected', False)
  
-            # ── Early Exit A: Severe harm rule violation (skip tech check) ──
+            # ── Step 3: ALWAYS run image analysis if there's an image ──
+            # This ensures NSFW and CLIP checks happen regardless of tech score
+            image_analysis_results = await self._analyze_image(image_path, text) if image_path else {
+                "image_analysis": None,
+                "relevance_analysis": None,
+                "nsfw_score": 0.0,
+                "clip_similarity": None,
+                "mismatch_detected": False
+            }
+            
+            nsfw_score = image_analysis_results["nsfw_score"]
+            clip_similarity = image_analysis_results["clip_similarity"]
+            mismatch_detected = image_analysis_results["mismatch_detected"]
+            
+            # ── Step 4: Early Exit A: Severe harm rule violation ──
             if rule_results.get('rule_score', 0) > 0.8:
                 logger.warning(
                     f"🛑 EARLY BLOCK — rule engine: score={rule_results.get('rule_score', 0):.2f}"
@@ -463,15 +546,17 @@ class ModerationService:
                         "suspicious_urls": suspicious_urls,
                         "has_suspicious_urls": len(suspicious_urls) > 0,
                     },
+                    "image_analysis": image_analysis_results["image_analysis"],
+                    "relevance_analysis": image_analysis_results["relevance_analysis"],
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
                 decision_input = {
                     'rule_score': rule_results.get('rule_score', 1.0),
                     'has_suspicious_urls': len(suspicious_urls) > 0,
-                    'tech_relevance_score': tech_relevance['tech_relevance_score'],
-                    'tech_zone': tech_relevance['zone'],
-                    'text_score': tech_relevance['tech_relevance_score'],
+                    'tech_relevance_score': tech_score,
+                    'tech_zone': tech_zone,
+                    'text_score': tech_score,
                     'toxicity_score': 0.0,
                     'sexual_score': 0.0,
                     'self_harm_score': 0.0,
@@ -479,11 +564,11 @@ class ModerationService:
                     'drugs_score': 0.0,
                     'threats_score': 0.0,
                     'is_harmful': True,
-                    'nsfw_score': 0.0,
+                    'nsfw_score': nsfw_score,
+                    'clip_similarity': clip_similarity,
                     'cyber_harm_score': cyber_harm_score,
                     'cyber_harm_category': cyber_harm_category,
                     'content_mixing_detected': content_mixing_detected,
-                    'clip_similarity': None,
                 }
                 decision = self.decision_engine.make_decision(decision_input)
                 explanation = self.explanation_builder.build_explanation(decision, results)
@@ -494,11 +579,12 @@ class ModerationService:
                     flagged_phrases=explanation.get("flagged_phrases", []),
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
- 
-            # ── Early Exit B: Clearly off-topic (skip expensive ML) ──
-            if tech_relevance['zone'] == "off_topic":
+            
+            # ── Step 5: Early Exit B: NSFW content check (CRITICAL) ──
+            # Block NSFW content regardless of tech score
+            if nsfw_score >= self.NSFW_THRESHOLD:
                 logger.warning(
-                    f"🛑 EARLY BLOCK — off-topic: score={tech_relevance['tech_relevance_score']:.3f}"
+                    f"🛑 NSFW BLOCK — post {post_id} has NSFW score {nsfw_score:.3f} >= {self.NSFW_THRESHOLD}"
                 )
                 results = {
                     "rule_based": rule_results,
@@ -509,30 +595,194 @@ class ModerationService:
                         "suspicious_urls": suspicious_urls,
                         "has_suspicious_urls": len(suspicious_urls) > 0,
                     },
-                    "image_analysis": None,
-                    "relevance_analysis": None,
+                    "image_analysis": image_analysis_results["image_analysis"],
+                    "relevance_analysis": image_analysis_results["relevance_analysis"],
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
-                decision_input = {
-                    'rule_score': rule_results.get('rule_score', 0.0),
-                    'has_suspicious_urls': len(suspicious_urls) > 0,
-                    'tech_relevance_score': tech_relevance['tech_relevance_score'],
-                    'tech_zone': tech_relevance['zone'],
-                    'text_score': tech_relevance['tech_relevance_score'],
-                    'toxicity_score': 0.0,
-                    'sexual_score': 0.0,
-                    'self_harm_score': 0.0,
-                    'violence_score': 0.0,
-                    'drugs_score': 0.0,
-                    'threats_score': 0.0,
-                    'is_harmful': False,
-                    'nsfw_score': 0.0,
-                    'cyber_harm_score': cyber_harm_score,
-                    'cyber_harm_category': cyber_harm_category,
-                    'content_mixing_detected': content_mixing_detected,
+                
+                decision = {
+                    "allowed": False, 
+                    "reasons": [f"NSFW content detected (score: {nsfw_score:.3f})"], 
+                    "flagged_phrases": []
                 }
-                decision = self.decision_engine.make_decision(decision_input)
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=decision["allowed"],
+                    reasons=explanation.get("reasons", []),
+                    flagged_phrases=explanation.get("flagged_phrases", []),
+                )
+                return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
+            
+            # ── Step 6: Early Exit C: Image-text mismatch check ──
+            # Block if image and text are completely mismatched (spam/scam protection)
+            if mismatch_detected and text and len(text.strip()) > 10:
+                logger.warning(
+                    f"🛑 MISMATCH BLOCK — post {post_id} has image-text mismatch, "
+                    f"similarity={clip_similarity:.3f}"
+                )
+                results = {
+                    "rule_based": rule_results,
+                    "tech_relevance": tech_relevance,
+                    "text_analysis": {"scores": {}, "flagged_categories": []},
+                    "url_analysis": {
+                        "all_urls": urls,
+                        "suspicious_urls": suspicious_urls,
+                        "has_suspicious_urls": len(suspicious_urls) > 0,
+                    },
+                    "image_analysis": image_analysis_results["image_analysis"],
+                    "relevance_analysis": image_analysis_results["relevance_analysis"],
+                    "tech_context_filter": tech_ctx_result,
+                    "intent_entity_filter": intent_result,
+                }
+                
+                decision = {
+                    "allowed": False, 
+                    "reasons": [f"Image-text mismatch detected (similarity: {clip_similarity:.3f})"], 
+                    "flagged_phrases": []
+                }
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=decision["allowed"],
+                    reasons=explanation.get("reasons", []),
+                    flagged_phrases=explanation.get("flagged_phrases", []),
+                )
+                return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
+            
+            # Image-only post handling
+            is_image_only = (not text or len(text.strip()) < 10) and image_path is not None
+            if is_image_only:
+                logger.info("🖼️  Image-only post — using image analysis only")
+                # For image-only posts, we've already run NSFW checks
+                # If we got here, NSFW passed, so allow the post
+                results = {
+                    "rule_based": rule_results,
+                    "tech_relevance": tech_relevance,
+                    "text_analysis": {"scores": {}, "flagged_categories": []},
+                    "url_analysis": {
+                        "all_urls": urls,
+                        "suspicious_urls": suspicious_urls,
+                        "has_suspicious_urls": len(suspicious_urls) > 0,
+                    },
+                    "image_analysis": image_analysis_results["image_analysis"],
+                    "relevance_analysis": image_analysis_results["relevance_analysis"],
+                    "tech_context_filter": tech_ctx_result,
+                    "intent_entity_filter": intent_result,
+                }
+                
+                decision = {
+                    "allowed": True, 
+                    "reasons": ["Image-only post passed NSFW check"], 
+                    "flagged_phrases": []
+                }
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=decision["allowed"],
+                    reasons=explanation.get("reasons", []),
+                    flagged_phrases=explanation.get("flagged_phrases", []),
+                )
+                return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
+            
+            # ── Step 7: Auto-allow high-quality tech content (after passing image checks) ──
+            # Allow posts with tech score above threshold, now that we've verified image safety
+            if tech_score >= self.TECH_SCORE_THRESHOLD:
+                logger.info(
+                    f"✅ AUTO-ALLOW: Post {post_id} has high tech score {tech_score:.3f} >= {self.TECH_SCORE_THRESHOLD}. "
+                    f"Zone={tech_zone}, categories={matched_categories}"
+                )
+                
+                results = {
+                    "rule_based": rule_results,
+                    "tech_relevance": tech_relevance,
+                    "text_analysis": {"scores": {}, "flagged_categories": []},
+                    "url_analysis": {
+                        "all_urls": urls,
+                        "suspicious_urls": suspicious_urls,
+                        "has_suspicious_urls": len(suspicious_urls) > 0,
+                    },
+                    "image_analysis": image_analysis_results["image_analysis"],
+                    "relevance_analysis": image_analysis_results["relevance_analysis"],
+                    "tech_context_filter": tech_ctx_result,
+                    "intent_entity_filter": intent_result,
+                }
+                
+                decision = {
+                    "allowed": True, 
+                    "reasons": [f"High-quality tech content (score: {tech_score:.3f}), passed image checks"], 
+                    "flagged_phrases": []
+                }
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=decision["allowed"],
+                    reasons=explanation.get("reasons", []),
+                    flagged_phrases=explanation.get("flagged_phrases", []),
+                )
+                return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
+            
+            # ── Step 8: Allow posts with allowed tech categories (after image checks) ──
+            is_allowed_category = any(cat in self.ALLOWED_TECH_CATEGORIES for cat in matched_categories)
+            
+            if is_allowed_category:
+                logger.info(
+                    f"🔄 AUTO-ALLOW: Post {post_id} has tech category {matched_categories} "
+                    f"despite low score={tech_score:.3f}. Allowing after image checks."
+                )
+                
+                results = {
+                    "rule_based": rule_results,
+                    "tech_relevance": tech_relevance,
+                    "text_analysis": {"scores": {}, "flagged_categories": []},
+                    "url_analysis": {
+                        "all_urls": urls,
+                        "suspicious_urls": suspicious_urls,
+                        "has_suspicious_urls": len(suspicious_urls) > 0,
+                    },
+                    "image_analysis": image_analysis_results["image_analysis"],
+                    "relevance_analysis": image_analysis_results["relevance_analysis"],
+                    "tech_context_filter": tech_ctx_result,
+                    "intent_entity_filter": intent_result,
+                }
+                
+                decision = {
+                    "allowed": True, 
+                    "reasons": [f"Tech category {matched_categories} detected (score: {tech_score:.3f})"], 
+                    "flagged_phrases": []
+                }
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=decision["allowed"],
+                    reasons=explanation.get("reasons", []),
+                    flagged_phrases=explanation.get("flagged_phrases", []),
+                )
+                return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
+            
+            # ── Step 9: Block non-tech content (no allowed categories, low score) ──
+            if tech_zone in ["off_topic", "needs_review"] and tech_score < self.TECH_SCORE_THRESHOLD and not is_allowed_category:
+                logger.warning(
+                    f"🛑 EARLY BLOCK — Non-tech content: score={tech_score:.3f}, "
+                    f"zone={tech_zone}, categories={matched_categories}"
+                )
+                results = {
+                    "rule_based": rule_results,
+                    "tech_relevance": tech_relevance,
+                    "text_analysis": {"scores": {}, "flagged_categories": []},
+                    "url_analysis": {
+                        "all_urls": urls,
+                        "suspicious_urls": suspicious_urls,
+                        "has_suspicious_urls": len(suspicious_urls) > 0,
+                    },
+                    "image_analysis": image_analysis_results["image_analysis"],
+                    "relevance_analysis": image_analysis_results["relevance_analysis"],
+                    "tech_context_filter": tech_ctx_result,
+                    "intent_entity_filter": intent_result,
+                }
+                
+                decision = {"allowed": False, "reasons": ["Non-tech/off-topic content detected"], "flagged_phrases": []}
                 explanation = self.explanation_builder.build_explanation(decision, results)
                 post_repository.update_moderation_result(
                     post_id=post_id,
@@ -542,7 +792,9 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
  
-            # ── Step 3: ML text analysis (only runs for tech/review zone posts) ──
+            # ── Step 10: ML text analysis (only runs for borderline/uncertain cases) ──
+            logger.info(f"🔍 Running ML analysis for post {post_id} (tech_score={tech_score:.3f}, zone={tech_zone})")
+            
             try:
                 if USE_ML_MODEL:
                     model = get_multitask_moderator()
@@ -566,51 +818,18 @@ class ModerationService:
                 "rule_based": rule_results,
                 "tech_relevance": tech_relevance,
                 "text_analysis": text_results,
-                "url_analysis": url_analysis_results,
-                "image_analysis": None,
-                "relevance_analysis": None,
+                "url_analysis": {
+                    "all_urls": urls,
+                    "suspicious_urls": suspicious_urls,
+                    "has_suspicious_urls": len(suspicious_urls) > 0,
+                },
+                "image_analysis": image_analysis_results["image_analysis"],
+                "relevance_analysis": image_analysis_results["relevance_analysis"],
                 "tech_context_filter": tech_ctx_result,
                 "intent_entity_filter": intent_result,
             }
  
-            # ── Steps 4 & 5: Image analysis ──
-            nsfw_score = 0.0
-            if image_path:
-                clean_path = image_path.lstrip('/')
-                full_image_path = os.path.normpath(clean_path)
- 
-                if os.path.exists(full_image_path):
-                    try:
-                        nsfw_results = await self._run_sync(nsfw_detector.analyze, full_image_path)
-                        logger.info(
-                            f"🖼️  NSFW — prob={nsfw_results.get('nsfw_probability', 0):.4f}, "
-                            f"is_nsfw={nsfw_results.get('is_nsfw')}"
-                        )
-                        results["image_analysis"] = nsfw_results
-                        nsfw_score = nsfw_results.get('nsfw_probability', 0)
-                    except Exception as e:
-                        logger.error(f"NSFW analysis failed: {e}")
-                        nsfw_score = 0.6
-                        results["image_analysis"] = {
-                            "nsfw_probability": 0.6,
-                            "is_nsfw": False,
-                            "primary_category": "analysis_failed",
-                            "explicit_content_detected": False,
-                            "using_fallback": True,
-                        }
- 
-                    try:
-                        clip_results = await self._run_sync(clip_analyzer.analyze, text, full_image_path)
-                        logger.info(
-                            f"🔄 CLIP — similarity={clip_results.get('similarity_score', 0):.4f}"
-                        )
-                        results["relevance_analysis"] = clip_results
-                    except Exception as e:
-                        logger.error(f"CLIP analysis failed: {e}")
-                else:
-                    logger.warning(f"⚠️  Image file not found: {full_image_path}")
- 
-            # ── Step 6: Build decision input ──
+            # ── Step 11: Build decision input ──
             text_scores = text_results.get('scores', {})
  
             score_mapping = {
@@ -628,16 +847,12 @@ class ModerationService:
                 'has_suspicious_urls': len(suspicious_urls) > 0,
                 'is_harmful': text_results.get('is_harmful', False),
                 'nsfw_score': nsfw_score,
-                # Tech relevance from rule engine (authoritative)
-                'tech_relevance_score': tech_relevance['tech_relevance_score'],
-                'tech_zone': tech_relevance['zone'],
-                # Cyber-harm & content-mixing signals from advanced filters
+                'tech_relevance_score': tech_score,
+                'tech_zone': tech_zone,
                 'cyber_harm_score': cyber_harm_score,
                 'cyber_harm_category': cyber_harm_category,
                 'content_mixing_detected': content_mixing_detected,
-
-                # CLIP image-text similarity score
-                'clip_similarity': (results.get("relevance_analysis") or {}).get("similarity_score", None),
+                'clip_similarity': clip_similarity,
             }
  
             for model_key, decision_key in score_mapping.items():
@@ -669,11 +884,11 @@ class ModerationService:
                             for k, v in decision_input.items())
             )
  
-            # ── Step 7: Decision & Explanation ──
+            # ── Step 12: Decision & Explanation ──
             decision = self.decision_engine.make_decision(decision_input)
             explanation = self.explanation_builder.build_explanation(decision, results)
  
-            # ── Step 8: Metrics (non-blocking) ──
+            # ── Step 13: Metrics (non-blocking) ──
             try:
                 asyncio.create_task(
                     self._record_metrics(post_id=post_id, text=text, results=results)
@@ -681,7 +896,7 @@ class ModerationService:
             except RuntimeError:
                 await self._record_metrics(post_id=post_id, text=text, results=results)
  
-            # ── Step 9: Update DB ──
+            # ── Step 14: Update DB ──
             post_repository.update_moderation_result(
                 post_id=post_id,
                 allowed=decision["allowed"],
@@ -718,4 +933,3 @@ class ModerationService:
             except Exception:
                 pass
             return {"post_id": post_id, "allowed": False, "error": str(e)}
- 
