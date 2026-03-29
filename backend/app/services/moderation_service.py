@@ -1,8 +1,3 @@
-"""
-Moderation Service - Orchestrates the entire moderation pipeline
-with full URL extractor integration
-"""
-
 from typing import Optional, Dict, Any, List
 import asyncio
 import logging
@@ -20,8 +15,7 @@ from app.ml.efficientnet_model import efficientnet_nsfw as nsfw_detector
 from app.ml.tech_context_filter import get_tech_context_filter
 from app.ml.intent_entity_filter import get_intent_entity_filter
 from app.db.mongodb import post_repository
-from app.utils.logger_utils import moderation_logger  # <-- ADDED
-
+ 
 logger = logging.getLogger(__name__)
  
 # Try to import the multitask model, but have a fallback
@@ -227,6 +221,37 @@ class ModerationService:
         logger.info(f"🔗 CLIP similarity threshold: {self.CLIP_SIMILARITY_THRESHOLD}")
         logger.info(f"🔍 Semantic analysis enabled: {USE_SEMANTIC_ANALYSIS}")
         logger.info(f"🔍 Semantic tech detection enabled: {USE_SEMANTIC_TECH}")
+    
+    def _has_serious_violation(self, rule_results: Dict[str, Any]) -> bool:
+        """Check if there are any rule violations that should block the post."""
+        
+        # Check for banned keywords (including Hindi abuse)
+        if rule_results.get('banned_keywords'):
+            logger.warning(f"🚫 Blocking due to banned keywords: {rule_results.get('banned_keywords')}")
+            return True
+        
+        # Check for Hindi abuse
+        hindi_detection = rule_results.get('hindi_detection', {})
+        if hindi_detection.get('has_hindi_abuse'):
+            logger.warning(f"🚫 Blocking due to Hindi abuse: {hindi_detection.get('matched_words')}")
+            return True
+        
+        # Check for suspicious URLs
+        if rule_results.get('suspicious_urls'):
+            logger.warning(f"🚫 Blocking due to suspicious URLs: {rule_results.get('suspicious_urls')}")
+            return True
+        
+        # Check for spam
+        if rule_results.get('spam_detected'):
+            logger.warning(f"🚫 Blocking due to spam detection")
+            return True
+        
+        # Check for any violations
+        if rule_results.get('violations'):
+            logger.warning(f"🚫 Blocking due to violations: {rule_results.get('violations')}")
+            return True
+        
+        return False
  
     async def _run_sync(self, func, *args):
         """Run blocking ML calls in a thread pool."""
@@ -440,31 +465,6 @@ class ModerationService:
                     "post_id": post_id,
                 }
                 metrics_repository.insert_prediction(doc)
-                
-            # URL metrics
-            url_res = results.get("url_analysis") or {}
-            if url_res and url_res.get("total_urls", 0) > 0:
-                doc = {
-                    "timestamp": timestamp,
-                    "model": "url_extractor",
-                    "input_type": "urls",
-                    "input_preview": text[:200],
-                    "prediction": {
-                        "total_urls": url_res.get("total_urls", 0),
-                        "suspicious_urls": url_res.get("suspicious_urls", 0),
-                        "high_risk_urls": url_res.get("high_risk_urls", 0),
-                        "medium_risk_urls": url_res.get("medium_risk_urls", 0),
-                        "max_risk_score": url_res.get("max_risk_score", 0),
-                    },
-                    "confidence": float(url_res.get("max_risk_score", 0)),
-                    "response_time_ms": url_res.get("processing_time_ms", 0),
-                    "language": None,
-                    "category": "suspicious_urls" if url_res.get("has_suspicious", False) else "safe",
-                    "correct": None,
-                    "user_feedback": None,
-                    "post_id": post_id,
-                }
-                metrics_repository.insert_prediction(doc)
 
         except Exception as e:
             logger.error(f"Failed to record metrics for post {post_id}: {e}", exc_info=True)
@@ -476,16 +476,19 @@ class ModerationService:
         image_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run full moderation pipeline on a post."""
-        
-        # REPLACE: logger.info with clean logging
-        moderation_logger.start_moderation(post_id)
+        logger.info(f"▶️  Starting moderation — post: {post_id}")
  
         try:
             # ── Step 1: Rule-based harm checks (fast, no ML) ──
             rule_results = self.rule_engine.check_rules(text)
  
-            # REPLACE: verbose logs with clean logging
-            moderation_logger.log_rule_engine(rule_results)
+            logger.info(f"📋 Rule engine — score={rule_results.get('rule_score', 0):.2f}, "
+                        f"violations={rule_results.get('violations', [])}")
+ 
+            if rule_results.get('banned_keywords'):
+                logger.warning(f"   Banned keywords: {rule_results.get('banned_keywords')}")
+            if rule_results.get('hindi_detection', {}).get('has_hindi_abuse'):
+                logger.warning(f"   Hindi abuse: {rule_results.get('hindi_detection', {}).get('matched_words')}")
  
             # ── Step 2: Tech relevance scoring (semantic OR rule-based) ──
             if text and USE_SEMANTIC_TECH and self.semantic_analyzer:
@@ -513,9 +516,6 @@ class ModerationService:
             tech_zone = tech_relevance.get('zone', 'off_topic')
             matched_categories = tech_relevance.get('matched_categories', [])
  
-            # REPLACE: verbose logs with clean logging
-            details = tech_relevance.get('details', {})
-            moderation_logger.log_tech_scoring(tech_score, tech_zone, "Hybrid Rule Engine", details)
             logger.info(
                 f"🔍 Tech relevance — score={tech_score:.3f}, "
                 f"zone={tech_zone}, "
@@ -734,7 +734,7 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
-# ── Step 7: Auto-allow high-quality tech content (after passing image checks) ──
+            # ── Step 7: Auto-allow high-quality tech content (after passing image checks) ──
             # BUT FIRST: Check for rule violations
             if self._has_serious_violation(rule_results):
                 logger.warning(f"🛑 BLOCKING despite tech score: post has rule violations - {rule_results.get('violations', [])}")
@@ -767,11 +767,12 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
-            # Allow posts with tech score above threshold, now that we've verified image safety
-            if tech_score >= self.TECH_SCORE_THRESHOLD:
+            # Only auto-allow CLEAR TECH zone posts with good scores
+            # REVIEW zone posts should go through ML analysis
+            if tech_zone == "tech" and tech_score >= self.TECH_SCORE_THRESHOLD:
                 logger.info(
-                    f"✅ AUTO-ALLOW: Post {post_id} has high tech score {tech_score:.3f} >= {self.TECH_SCORE_THRESHOLD}. "
-                    f"Zone={tech_zone}, categories={matched_categories}, method={tech_relevance.get('method', 'rule_engine')}"
+                    f"✅ AUTO-ALLOW: Post {post_id} has high tech score {tech_score:.3f} in TECH zone. "
+                    f"Zone={tech_zone}, categories={matched_categories}"
                 )
                 
                 results = {
@@ -874,7 +875,7 @@ class ModerationService:
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
             # ── Step 9: Block non-tech content (no allowed categories, low score) ──
-            if tech_zone in ["off_topic", "needs_review"] and tech_score < self.TECH_SCORE_THRESHOLD and not is_allowed_category:
+            if tech_zone in ["off_topic", "review"] and tech_score < self.TECH_SCORE_THRESHOLD and not is_allowed_category:
                 logger.warning(
                     f"🛑 EARLY BLOCK — Non-tech content: score={tech_score:.3f}, "
                     f"zone={tech_zone}, categories={matched_categories}"
@@ -919,11 +920,6 @@ class ModerationService:
                     text_results = fallback_model.analyze(text)
                     logger.info("✅ Fallback model analysis complete")
  
-                # REPLACE: verbose logs with clean logging
-                scores = text_results.get('scores', {})
-                flagged = text_results.get('flagged_categories', [])
-                moderation_logger.log_harm_scores(scores, flagged)
-                moderation_logger.log_model_used('Ensemble (toxic-bert + hatebert + semantic)', text_results.get('tech_source', 'ensemble'))
                 logger.info(
                     f"📊 Text analysis — harmful={text_results.get('is_harmful', False)}, "
                     f"flagged={text_results.get('flagged_categories', [])}, "
@@ -934,10 +930,6 @@ class ModerationService:
                 logger.error(f"❌ Text analysis failed: {e}", exc_info=True)
                 text_results = fallback_model.analyze(text)
                 logger.info("⚠️  Used fallback after ML failure")
-                scores = text_results.get('scores', {})
-                flagged = text_results.get('flagged_categories', [])
-                moderation_logger.log_harm_scores(scores, flagged)
-                moderation_logger.log_model_used('Fallback (keyword)', 'fallback')
  
             results = {
                 "rule_based": rule_results,
@@ -1029,20 +1021,15 @@ class ModerationService:
                 flagged_phrases=explanation.get("flagged_phrases", []),
             )
  
-            # REPLACE: verbose log with clean logging
-            moderation_logger.log_decision(decision, tech_score)
+            logger.info(
+                f"✅ Moderation complete — post={post_id}, "
+                f"allowed={decision['allowed']}, reasons={decision.get('reasons', [])}"
+            )
  
-            # Fix: Use urls and suspicious_urls directly (url_analysis_results was undefined)
             return {
                 "post_id": post_id,
                 "allowed": decision["allowed"],
                 "results": results,
-                "url_summary": {
-                    "total_urls": len(urls),
-                    "suspicious_urls": len(suspicious_urls),
-                    "has_suspicious": len(suspicious_urls) > 0,
-                    "max_risk_score": max([u.get("risk_score", 0) for u in urls]) if urls else 0
-                }
             }
  
         except Exception as e:
