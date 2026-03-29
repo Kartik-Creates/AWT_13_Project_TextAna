@@ -140,7 +140,8 @@ class SemanticAnalyzer:
             "primary_category": "tech" if tech["zone"] == "tech" else "non_tech",
             "tech_zone": tech["zone"],
             "processing_time_ms": int((time.time() - start_time) * 1000),
-            "method": "semantic"
+            "method": "semantic",
+            "source": "semantic"
         }
         
         return result
