@@ -112,3 +112,4 @@ export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore
     </div>
   );
 }
+/**This file is the main feed page of the frontend application. It displays a list of posts and includes a form for creating new posts. The page also implements infinite scrolling to load more posts as the user scrolls down. Additionally, it provides real-time feedback on post submissions using a toast notification system.**/
