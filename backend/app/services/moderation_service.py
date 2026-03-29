@@ -168,17 +168,30 @@ except ImportError as e:
  
     fallback_model = FallbackModerator()
  
+# Try to import semantic analyzer (Sentence Transformers)
+try:
+    from app.ml.semantic_analyzer import get_semantic_analyzer
+    USE_SEMANTIC_ANALYSIS = os.getenv("USE_SEMANTIC_ANALYSIS", "false").lower() == "true"
+    USE_SEMANTIC_TECH = os.getenv("USE_SEMANTIC_TECH", "false").lower() == "true"
+    if USE_SEMANTIC_ANALYSIS or USE_SEMANTIC_TECH:
+        logger.info("✅ Semantic analyzer import successful")
+    else:
+        logger.info("ℹ️ Semantic analyzer disabled via config")
+except ImportError as e:
+    logger.warning(f"⚠️ Could not import semantic analyzer: {e}")
+    USE_SEMANTIC_ANALYSIS = False
+    USE_SEMANTIC_TECH = False
  
 class ModerationService:
     """Orchestrates the entire moderation pipeline.
  
     Pipeline:
       1. Rule-based harm checks (keywords / URLs / spam)
-      2. Tech relevance scoring
+      2. Tech relevance scoring (rule-based OR semantic)
       3. Image analysis (NSFW + CLIP) - ALWAYS RUNS FOR IMAGES
       4. Early exits for rule violations
       5. Auto-allow for high-quality tech content (after image checks)
-      6. ML text toxicity analysis for borderline cases
+      6. ML text toxicity analysis (multitask OR semantic OR fallback)
       7. Decision engine & Explanation
       8. DB update + metrics
  
@@ -196,11 +209,24 @@ class ModerationService:
         self.text_processor = TextProcessor()
         self.decision_engine = DecisionEngine()
         self.explanation_builder = ExplanationBuilder()
+        
+        # Initialize semantic analyzer if enabled
+        self.semantic_analyzer = None
+        if USE_SEMANTIC_ANALYSIS or USE_SEMANTIC_TECH:
+            try:
+                self.semantic_analyzer = get_semantic_analyzer()
+                logger.info("✅ Semantic analyzer initialized")
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize semantic analyzer: {e}")
+                self.semantic_analyzer = None
+        
         logger.info("✅ Moderation service initialized")
         logger.info(f"📋 Allowed tech categories: {self.ALLOWED_TECH_CATEGORIES}")
         logger.info(f"📊 Tech score threshold for auto-approval: {self.TECH_SCORE_THRESHOLD}")
         logger.info(f"🚫 NSFW threshold: {self.NSFW_THRESHOLD}")
         logger.info(f"🔗 CLIP similarity threshold: {self.CLIP_SIMILARITY_THRESHOLD}")
+        logger.info(f"🔍 Semantic analysis enabled: {USE_SEMANTIC_ANALYSIS}")
+        logger.info(f"🔍 Semantic tech detection enabled: {USE_SEMANTIC_TECH}")
  
     async def _run_sync(self, func, *args):
         """Run blocking ML calls in a thread pool."""
@@ -276,7 +302,7 @@ class ModerationService:
             if text_res:
                 doc = {
                     "timestamp": timestamp,
-                    "model": "multitask" if USE_ML_MODEL else "fallback",
+                    "model": text_res.get("method", "multitask" if USE_ML_MODEL else "fallback"),
                     "input_type": "text",
                     "input_preview": text[:200],
                     "prediction": {
@@ -300,7 +326,7 @@ class ModerationService:
             if tech_res:
                 doc = {
                     "timestamp": timestamp,
-                    "model": "rule_engine_tech",
+                    "model": tech_res.get("method", "rule_engine_tech"),
                     "input_type": "text",
                     "input_preview": text[:200],
                     "prediction": {
@@ -461,8 +487,28 @@ class ModerationService:
             # REPLACE: verbose logs with clean logging
             moderation_logger.log_rule_engine(rule_results)
  
-            # ── Step 2: Tech relevance scoring ──
-            tech_relevance = self.rule_engine.check_tech_relevance(text) if text else {"tech_relevance_score": 0, "zone": "off_topic", "matched_categories": []}
+            # ── Step 2: Tech relevance scoring (semantic OR rule-based) ──
+            if text and USE_SEMANTIC_TECH and self.semantic_analyzer:
+                logger.info("🔍 Using semantic analyzer for tech relevance")
+                semantic_tech = self.semantic_analyzer.analyze_tech_relevance(text)
+                tech_relevance = {
+                    "tech_relevance_score": semantic_tech["score"],
+                    "zone": semantic_tech["zone"],
+                    "matched_categories": ["semantic_tech"] if semantic_tech["zone"] == "tech" else [],
+                    "matched_terms": [],
+                    "non_tech_signals": [],
+                    "mixing": {"mixing_detected": False},
+                    "details": semantic_tech,
+                    "method": "semantic"
+                }
+            else:
+                tech_relevance = self.rule_engine.check_tech_relevance(text) if text else {
+                    "tech_relevance_score": 0, 
+                    "zone": "off_topic", 
+                    "matched_categories": [],
+                    "method": "rule_engine"
+                }
+            
             tech_score = tech_relevance.get('tech_relevance_score', 0)
             tech_zone = tech_relevance.get('zone', 'off_topic')
             matched_categories = tech_relevance.get('matched_categories', [])
@@ -687,7 +733,7 @@ class ModerationService:
             if tech_score >= self.TECH_SCORE_THRESHOLD:
                 logger.info(
                     f"✅ AUTO-ALLOW: Post {post_id} has high tech score {tech_score:.3f} >= {self.TECH_SCORE_THRESHOLD}. "
-                    f"Zone={tech_zone}, categories={matched_categories}"
+                    f"Zone={tech_zone}, categories={matched_categories}, method={tech_relevance.get('method', 'rule_engine')}"
                 )
                 
                 results = {
@@ -788,11 +834,14 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
  
-            # ── Step 10: ML text analysis (only runs for borderline/uncertain cases) ──
+            # ── Step 10: ML text analysis (semantic OR multitask OR fallback) ──
             logger.info(f"🔍 Running ML analysis for post {post_id} (tech_score={tech_score:.3f}, zone={tech_zone})")
             
             try:
-                if USE_ML_MODEL:
+                if USE_SEMANTIC_ANALYSIS and self.semantic_analyzer:
+                    logger.info("✅ Using semantic analyzer for text analysis")
+                    text_results = self.semantic_analyzer.analyze(text)
+                elif USE_ML_MODEL:
                     model = get_multitask_moderator()
                     text_results = await self._run_sync(model.analyze, text)
                     logger.info("✅ Multi-task model analysis complete")
