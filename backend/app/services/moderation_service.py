@@ -736,7 +736,39 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
-            # ── Step 7: Auto-allow high-quality tech content (after passing image checks) ──
+   # ── Step 7: Auto-allow high-quality tech content (after passing image checks) ──
+            # BUT FIRST: Check for rule violations
+            if self._has_serious_violation(rule_results):
+                logger.warning(f"🛑 BLOCKING despite tech score: post has rule violations - {rule_results.get('violations', [])}")
+                results = {
+                    "rule_based": rule_results,
+                    "tech_relevance": tech_relevance,
+                    "text_analysis": {"scores": {}, "flagged_categories": []},
+                    "url_analysis": {
+                        "all_urls": urls,
+                        "suspicious_urls": suspicious_urls,
+                        "has_suspicious_urls": len(suspicious_urls) > 0,
+                    },
+                    "image_analysis": image_analysis_results["image_analysis"],
+                    "relevance_analysis": image_analysis_results["relevance_analysis"],
+                    "tech_context_filter": tech_ctx_result,
+                    "intent_entity_filter": intent_result,
+                }
+                
+                decision = {
+                    "allowed": False, 
+                    "reasons": [f"Rule violation detected: {', '.join(rule_results.get('violations', []))}"], 
+                    "flagged_phrases": rule_results.get('banned_keywords', [])
+                }
+                explanation = self.explanation_builder.build_explanation(decision, results)
+                post_repository.update_moderation_result(
+                    post_id=post_id,
+                    allowed=decision["allowed"],
+                    reasons=explanation.get("reasons", []),
+                    flagged_phrases=explanation.get("flagged_phrases", []),
+                )
+                return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
+            
             # Allow posts with tech score above threshold, now that we've verified image safety
             if tech_score >= self.TECH_SCORE_THRESHOLD:
                 logger.info(
@@ -777,6 +809,38 @@ class ModerationService:
             is_allowed_category = any(cat in self.ALLOWED_TECH_CATEGORIES for cat in matched_categories)
             
             if is_allowed_category:
+                # Check for violations before allowing
+                if self._has_serious_violation(rule_results):
+                    logger.warning(f"🛑 BLOCKING despite tech category: post has rule violations - {rule_results.get('violations', [])}")
+                    results = {
+                        "rule_based": rule_results,
+                        "tech_relevance": tech_relevance,
+                        "text_analysis": {"scores": {}, "flagged_categories": []},
+                        "url_analysis": {
+                            "all_urls": urls,
+                            "suspicious_urls": suspicious_urls,
+                            "has_suspicious_urls": len(suspicious_urls) > 0,
+                        },
+                        "image_analysis": image_analysis_results["image_analysis"],
+                        "relevance_analysis": image_analysis_results["relevance_analysis"],
+                        "tech_context_filter": tech_ctx_result,
+                        "intent_entity_filter": intent_result,
+                    }
+                    
+                    decision = {
+                        "allowed": False, 
+                        "reasons": [f"Rule violation detected: {', '.join(rule_results.get('violations', []))}"], 
+                        "flagged_phrases": rule_results.get('banned_keywords', [])
+                    }
+                    explanation = self.explanation_builder.build_explanation(decision, results)
+                    post_repository.update_moderation_result(
+                        post_id=post_id,
+                        allowed=decision["allowed"],
+                        reasons=explanation.get("reasons", []),
+                        flagged_phrases=explanation.get("flagged_phrases", []),
+                    )
+                    return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
+                
                 logger.info(
                     f"🔄 AUTO-ALLOW: Post {post_id} has tech category {matched_categories} "
                     f"despite low score={tech_score:.3f}. Allowing after image checks."
