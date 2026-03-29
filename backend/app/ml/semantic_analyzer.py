@@ -270,6 +270,7 @@ class SemanticAnalyzer:
             "tech_zone": tech["zone"],
             "processing_time_ms": int((time.time() - start_time) * 1000),
             "method": "semantic",
+            "source": "semantic",
             "has_tech_context": tech.get("has_tech_context", False)
         }
         

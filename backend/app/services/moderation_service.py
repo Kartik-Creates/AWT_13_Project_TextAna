@@ -20,7 +20,8 @@ from app.ml.efficientnet_model import efficientnet_nsfw as nsfw_detector
 from app.ml.tech_context_filter import get_tech_context_filter
 from app.ml.intent_entity_filter import get_intent_entity_filter
 from app.db.mongodb import post_repository
- 
+from app.utils.logger_utils import moderation_logger  # <-- ADDED
+
 logger = logging.getLogger(__name__)
  
 # Try to import the multitask model, but have a fallback
@@ -475,19 +476,16 @@ class ModerationService:
         image_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run full moderation pipeline on a post."""
-        logger.info(f"▶️  Starting moderation — post: {post_id}")
+        
+        # REPLACE: logger.info with clean logging
+        moderation_logger.start_moderation(post_id)
  
         try:
             # ── Step 1: Rule-based harm checks (fast, no ML) ──
             rule_results = self.rule_engine.check_rules(text)
  
-            logger.info(f"📋 Rule engine — score={rule_results.get('rule_score', 0):.2f}, "
-                        f"violations={rule_results.get('violations', [])}")
- 
-            if rule_results.get('banned_keywords'):
-                logger.warning(f"   Banned keywords: {rule_results.get('banned_keywords')}")
-            if rule_results.get('hindi_detection', {}).get('has_hindi_abuse'):
-                logger.warning(f"   Hindi abuse: {rule_results.get('hindi_detection', {}).get('matched_words')}")
+            # REPLACE: verbose logs with clean logging
+            moderation_logger.log_rule_engine(rule_results)
  
             # ── Step 2: Tech relevance scoring (semantic OR rule-based) ──
             if text and USE_SEMANTIC_TECH and self.semantic_analyzer:
@@ -515,6 +513,9 @@ class ModerationService:
             tech_zone = tech_relevance.get('zone', 'off_topic')
             matched_categories = tech_relevance.get('matched_categories', [])
  
+            # REPLACE: verbose logs with clean logging
+            details = tech_relevance.get('details', {})
+            moderation_logger.log_tech_scoring(tech_score, tech_zone, "Hybrid Rule Engine", details)
             logger.info(
                 f"🔍 Tech relevance — score={tech_score:.3f}, "
                 f"zone={tech_zone}, "
@@ -854,6 +855,11 @@ class ModerationService:
                     text_results = fallback_model.analyze(text)
                     logger.info("✅ Fallback model analysis complete")
  
+                # REPLACE: verbose logs with clean logging
+                scores = text_results.get('scores', {})
+                flagged = text_results.get('flagged_categories', [])
+                moderation_logger.log_harm_scores(scores, flagged)
+                moderation_logger.log_model_used('Ensemble (toxic-bert + hatebert + semantic)', text_results.get('tech_source', 'ensemble'))
                 logger.info(
                     f"📊 Text analysis — harmful={text_results.get('is_harmful', False)}, "
                     f"flagged={text_results.get('flagged_categories', [])}, "
@@ -864,6 +870,10 @@ class ModerationService:
                 logger.error(f"❌ Text analysis failed: {e}", exc_info=True)
                 text_results = fallback_model.analyze(text)
                 logger.info("⚠️  Used fallback after ML failure")
+                scores = text_results.get('scores', {})
+                flagged = text_results.get('flagged_categories', [])
+                moderation_logger.log_harm_scores(scores, flagged)
+                moderation_logger.log_model_used('Fallback (keyword)', 'fallback')
  
             results = {
                 "rule_based": rule_results,
@@ -955,20 +965,19 @@ class ModerationService:
                 flagged_phrases=explanation.get("flagged_phrases", []),
             )
  
-            logger.info(
-                f"✅ Moderation complete — post={post_id}, "
-                f"allowed={decision['allowed']}, reasons={decision.get('reasons', [])}"
-            )
+            # REPLACE: verbose log with clean logging
+            moderation_logger.log_decision(decision, tech_score)
  
+            # Fix: Use urls and suspicious_urls directly (url_analysis_results was undefined)
             return {
                 "post_id": post_id,
                 "allowed": decision["allowed"],
                 "results": results,
                 "url_summary": {
-                    "total_urls": url_analysis_results['total_urls'],
-                    "suspicious_urls": url_analysis_results['suspicious_urls_count'],
-                    "has_suspicious": url_analysis_results['has_suspicious_urls'],
-                    "max_risk_score": url_analysis_results['max_risk_score']
+                    "total_urls": len(urls),
+                    "suspicious_urls": len(suspicious_urls),
+                    "has_suspicious": len(suspicious_urls) > 0,
+                    "max_risk_score": max([u.get("risk_score", 0) for u in urls]) if urls else 0
                 }
             }
  

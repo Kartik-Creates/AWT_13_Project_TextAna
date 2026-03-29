@@ -364,6 +364,7 @@ class EnsembleModerator:
             'primary_category': primary,
             'processing_time_ms': elapsed_ms,
             'tech_source': tech.get('source', 'unknown'),
+            'tech_source': tech.get('source', 'semantic'),
         }
 
     def analyze_batch(self, texts: List[str], batch_size: int = 8) -> List[Dict[str, Any]]:
