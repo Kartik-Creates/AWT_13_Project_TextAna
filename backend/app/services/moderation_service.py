@@ -516,6 +516,14 @@ class ModerationService:
             # REPLACE: verbose logs with clean logging
             details = tech_relevance.get('details', {})
             moderation_logger.log_tech_scoring(tech_score, tech_zone, "Hybrid Rule Engine", details)
+
+            logger.info(
+                f"🔍 Tech relevance — score={tech_score:.3f}, "
+                f"zone={tech_zone}, "
+                f"categories={matched_categories}, "
+                f"method={tech_relevance.get('method', 'rule_engine')}"
+            )
+
  
             # ── Step 2b: URL extraction ──
             urls = url_extractor.extract_urls(text) if text else []
@@ -854,6 +862,13 @@ class ModerationService:
                 flagged = text_results.get('flagged_categories', [])
                 moderation_logger.log_harm_scores(scores, flagged)
                 moderation_logger.log_model_used('Ensemble (toxic-bert + hatebert + semantic)', text_results.get('tech_source', 'ensemble'))
+
+                logger.info(
+                    f"📊 Text analysis — harmful={text_results.get('is_harmful', False)}, "
+                    f"flagged={text_results.get('flagged_categories', [])}, "
+                    f"method={text_results.get('method', 'unknown')}"
+                )
+
  
             except Exception as e:
                 logger.error(f"❌ Text analysis failed: {e}", exc_info=True)

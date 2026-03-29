@@ -271,10 +271,15 @@ class SemanticAnalyzer:
             "processing_time_ms": int((time.time() - start_time) * 1000),
             "method": "semantic",
 <<<<<<< HEAD
+<<<<<<< HEAD
             "source": "semantic"
 =======
             "has_tech_context": tech.get("has_tech_context", False)
 >>>>>>> af18810e98fc0ac4e95ac352cdf86352e4c61c9f
+=======
+            "source": "semantic",
+            "has_tech_context": tech.get("has_tech_context", False)
+>>>>>>> d7f6eed1241bd26b95cfafa4fe699821eb5a7a83
         }
         
         return result
