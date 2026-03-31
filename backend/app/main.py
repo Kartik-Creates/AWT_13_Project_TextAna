@@ -94,6 +94,7 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "database": "connected",
+        "moderation_approach": os.getenv("MODERATION_APPROACH", "ensemble"),
         "services": {
             "api": "operational",
             "moderation": "ready"
