@@ -1,0 +1,114 @@
+import { useState, useRef, useEffect, useCallback } from "react";
+import CreatePost from "../components/CreatePost";
+import PostCard from "../components/PostCard";
+import Toast from "../components/Toast";
+import postService from "../services/postService";
+
+export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore, hasMore }) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [toast, setToast] = useState({ message: null, type: null });
+  const sentinelRef = useRef(null);
+
+  // ── Infinite scroll with IntersectionObserver ────────────────────────
+  useEffect(() => {
+    if (!sentinelRef.current || !loadMore) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore) {
+          loadMore();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [loadMore, hasMore, loadingMore]);
+
+  // ── Inline post creation (feed page also has a CreatePost) ──────────
+  const handleSubmit = async ({ text, image }) => {
+    setIsSubmitting(true);
+    setToast({ message: "Analyzing content with AI moderator...", type: "loading" });
+    
+    try {
+      const result = await postService.createPost({ text, image });
+      if (!result.id) result.id = Date.now().toString();
+      
+      // Instant Moderation UI Feedback
+      if (result.allowed === false) {
+        setToast({ 
+          message: `Post Blocked: ${result.reasons?.join(", ") || "Community guidelines violation"}`, 
+          type: "error" 
+        });
+      } else {
+        setToast({ 
+          message: "Post Allowed and published successfully!", 
+          type: "success" 
+        });
+      }
+      
+      // Always add the post to the feed dynamically
+      setPosts((prev) => [result, ...prev]);
+    } catch (error) {
+      console.error("Error submitting post:", error);
+      setToast({ message: "Failed to process content. Make sure backend is running.", type: "error" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto w-full pb-20">
+      {/* Sticky Header */}
+      <div className="sticky top-0 z-10 glass-panel border-b border-gray-200/50 dark:border-white/10 px-4 py-2 pb-3 rounded-b-2xl mb-3 shadow-sm">
+        <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100 tracking-tight">Home</h2>
+      </div>
+
+      <CreatePost onSubmit={handleSubmit} isSubmitting={isSubmitting} />
+
+      <div className="h-px bg-gray-200 dark:bg-gray-800 my-4 w-full" />
+
+      <div className="space-y-1">
+        {isLoading ? (
+          <div className="flex justify-center p-8">
+            <div className="w-8 h-8 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin" />
+          </div>
+        ) : posts.length === 0 ? (
+          <div className="text-center py-12 text-gray-400 dark:text-gray-500">
+            <p className="text-lg font-medium">No posts yet</p>
+            <p className="text-sm">Be the first to create a post!</p>
+          </div>
+        ) : (
+          posts.map((post, idx) => (
+            <PostCard key={post.id || post._id || idx} post={post} />
+          ))
+        )}
+
+        {/* Infinite scroll sentinel */}
+        {!isLoading && hasMore && (
+          <div ref={sentinelRef} className="flex justify-center p-4">
+            {loadingMore && (
+              <div className="w-6 h-6 rounded-full border-3 border-indigo-200 border-t-indigo-600 animate-spin" />
+            )}
+          </div>
+        )}
+
+        {/* End of feed */}
+        {!isLoading && !hasMore && posts.length > 0 && (
+          <div className="text-center py-6 text-gray-400 dark:text-gray-500 text-sm">
+            You've reached the end of the feed
+          </div>
+        )}
+      </div>
+
+      {toast.message && (
+        <Toast 
+          message={toast.message} 
+          type={toast.type} 
+          onClose={() => setToast({ message: null, type: null })} 
+        />
+      )}
+    </div>
+  );
+}
