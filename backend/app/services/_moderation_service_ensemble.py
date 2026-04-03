@@ -257,7 +257,28 @@ class ModerationService:
         """Run blocking ML calls in a thread pool."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, func, *args)
- 
+
+    # ── ADDED: Borderline detection for human review ──
+    def _is_borderline(self, decision_input: dict) -> tuple[bool, list]:
+        """Flag posts that are borderline for human review.
+        Triggers when: tech relevance is in review zone OR models disagree.
+        """
+        reasons = []
+        tech = decision_input.get('text_score', 0)
+        tox  = decision_input.get('toxicity_score', 0)
+        rule = decision_input.get('rule_score', 0)
+
+        # Condition 1: tech relevance in review zone
+        if 0.3 <= tech <= 0.5:
+            reasons.append(f"Tech relevance in review zone: {tech:.2f}")
+
+        # Condition 2: rule engine and toxicity model disagree
+        if rule < 0.4 and tox > 0.4:
+            reasons.append(f"Models disagree — rule_score={rule:.2f}, toxicity={tox:.2f}")
+
+        return len(reasons) > 0, reasons
+    # ── END ADDED ──
+
     async def _analyze_image(self, image_path: str, text: str) -> Dict[str, Any]:
         """Run image analysis (NSFW + CLIP) for a given image."""
         results = {
@@ -567,7 +588,6 @@ class ModerationService:
             content_mixing_detected = tech_relevance.get('mixing', {}).get('mixing_detected', False)
  
             # ── Step 3: ALWAYS run image analysis if there's an image ──
-            # This ensures NSFW and CLIP checks happen regardless of tech score
             image_analysis_results = await self._analyze_image(image_path, text) if image_path else {
                 "image_analysis": None,
                 "relevance_analysis": None,
@@ -629,7 +649,6 @@ class ModerationService:
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
             # ── Step 5: Early Exit B: NSFW content check (CRITICAL) ──
-            # Block NSFW content regardless of tech score
             if nsfw_score >= self.NSFW_THRESHOLD:
                 logger.warning(
                     f"🛑 NSFW BLOCK — post {post_id} has NSFW score {nsfw_score:.3f} >= {self.NSFW_THRESHOLD}"
@@ -648,7 +667,6 @@ class ModerationService:
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
-                
                 decision = {
                     "allowed": False, 
                     "reasons": [f"NSFW content detected (score: {nsfw_score:.3f})"], 
@@ -664,7 +682,6 @@ class ModerationService:
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
             # ── Step 6: Early Exit C: Image-text mismatch check ──
-            # Block if image and text are completely mismatched (spam/scam protection)
             if mismatch_detected and text and len(text.strip()) > 10:
                 logger.warning(
                     f"🛑 MISMATCH BLOCK — post {post_id} has image-text mismatch, "
@@ -684,7 +701,6 @@ class ModerationService:
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
-                
                 decision = {
                     "allowed": False, 
                     "reasons": [f"Image-text mismatch detected (similarity: {clip_similarity:.3f})"], 
@@ -703,8 +719,6 @@ class ModerationService:
             is_image_only = (not text or len(text.strip()) < 10) and image_path is not None
             if is_image_only:
                 logger.info("🖼️  Image-only post — using image analysis only")
-                # For image-only posts, we've already run NSFW checks
-                # If we got here, NSFW passed, so allow the post
                 results = {
                     "rule_based": rule_results,
                     "tech_relevance": tech_relevance,
@@ -719,7 +733,6 @@ class ModerationService:
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
-                
                 decision = {
                     "allowed": True, 
                     "reasons": ["Image-only post passed NSFW check"], 
@@ -734,8 +747,7 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
-            # ── Step 7: Auto-allow high-quality tech content (after passing image checks) ──
-            # BUT FIRST: Check for rule violations
+            # ── Step 7: Auto-allow high-quality tech content ──
             if self._has_serious_violation(rule_results):
                 logger.warning(f"🛑 BLOCKING despite tech score: post has rule violations - {rule_results.get('violations', [])}")
                 results = {
@@ -752,7 +764,6 @@ class ModerationService:
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
-                
                 decision = {
                     "allowed": False, 
                     "reasons": [f"Rule violation detected: {', '.join(rule_results.get('violations', []))}"], 
@@ -767,14 +778,11 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
-            # Only auto-allow CLEAR TECH zone posts with good scores
-            # REVIEW zone posts should go through ML analysis
             if tech_zone == "tech" and tech_score >= self.TECH_SCORE_THRESHOLD:
                 logger.info(
                     f"✅ AUTO-ALLOW: Post {post_id} has high tech score {tech_score:.3f} in TECH zone. "
                     f"Zone={tech_zone}, categories={matched_categories}"
                 )
-                
                 results = {
                     "rule_based": rule_results,
                     "tech_relevance": tech_relevance,
@@ -789,7 +797,6 @@ class ModerationService:
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
-                
                 decision = {
                     "allowed": True, 
                     "reasons": [f"High-quality tech content (score: {tech_score:.3f}), passed image checks"], 
@@ -804,11 +811,10 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
-            # ── Step 8: Allow posts with allowed tech categories (after image checks) ──
+            # ── Step 8: Allow posts with allowed tech categories ──
             is_allowed_category = any(cat in self.ALLOWED_TECH_CATEGORIES for cat in matched_categories)
             
             if is_allowed_category:
-                # Check for violations before allowing
                 if self._has_serious_violation(rule_results):
                     logger.warning(f"🛑 BLOCKING despite tech category: post has rule violations - {rule_results.get('violations', [])}")
                     results = {
@@ -825,7 +831,6 @@ class ModerationService:
                         "tech_context_filter": tech_ctx_result,
                         "intent_entity_filter": intent_result,
                     }
-                    
                     decision = {
                         "allowed": False, 
                         "reasons": [f"Rule violation detected: {', '.join(rule_results.get('violations', []))}"], 
@@ -844,7 +849,6 @@ class ModerationService:
                     f"🔄 AUTO-ALLOW: Post {post_id} has tech category {matched_categories} "
                     f"despite low score={tech_score:.3f}. Allowing after image checks."
                 )
-                
                 results = {
                     "rule_based": rule_results,
                     "tech_relevance": tech_relevance,
@@ -859,7 +863,6 @@ class ModerationService:
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
-                
                 decision = {
                     "allowed": True, 
                     "reasons": [f"Tech category {matched_categories} detected (score: {tech_score:.3f})"], 
@@ -874,7 +877,7 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
             
-            # ── Step 9: Block non-tech content (no allowed categories, low score) ──
+            # ── Step 9: Block non-tech content ──
             if tech_zone in ["off_topic", "review"] and tech_score < self.TECH_SCORE_THRESHOLD and not is_allowed_category:
                 logger.warning(
                     f"🛑 EARLY BLOCK — Non-tech content: score={tech_score:.3f}, "
@@ -894,7 +897,6 @@ class ModerationService:
                     "tech_context_filter": tech_ctx_result,
                     "intent_entity_filter": intent_result,
                 }
-                
                 decision = {"allowed": False, "reasons": ["Non-tech/off-topic content detected"], "flagged_phrases": []}
                 explanation = self.explanation_builder.build_explanation(decision, results)
                 post_repository.update_moderation_result(
@@ -905,7 +907,7 @@ class ModerationService:
                 )
                 return {"post_id": post_id, "allowed": decision["allowed"], "results": results}
  
-            # ── Step 10: ML text analysis (semantic OR multitask OR fallback) ──
+            # ── Step 10: ML text analysis ──
             logger.info(f"🔍 Running ML analysis for post {post_id} (tech_score={tech_score:.3f}, zone={tech_zone})")
             
             try:
@@ -1000,7 +1002,24 @@ class ModerationService:
                 + ", ".join(f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
                             for k, v in decision_input.items())
             )
- 
+
+            # ── ADDED: Borderline check — flag for human review before final decision ──
+            is_borderline, review_reasons = self._is_borderline(decision_input)
+            if is_borderline and not decision_input.get('is_harmful'):
+                logger.info(f"🔍 HUMAN REVIEW: Post {post_id} flagged as borderline — {review_reasons}")
+                post_repository.flag_for_human_review(
+                    post_id=post_id,
+                    reasons=review_reasons,
+                    scores={k: v for k, v in decision_input.items() if isinstance(v, float)}
+                )
+                return {
+                    "post_id": post_id,
+                    "allowed": True,
+                    "human_review": True,
+                    "review_reasons": review_reasons,
+                }
+            # ── END ADDED ──
+
             # ── Step 12: Decision & Explanation ──
             decision = self.decision_engine.make_decision(decision_input)
             explanation = self.explanation_builder.build_explanation(decision, results)

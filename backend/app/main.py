@@ -10,9 +10,9 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 import logging
-
 from app.api import posts, metrics
 from app.db.mongodb import mongodb
+from app.api import moderation_review
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +30,13 @@ app = FastAPI(
     title="Loops Content Moderation System",
     description="AI-powered content moderation API",
     version="1.0.0"
+)
+
+# Include moderation review router
+app.include_router(
+    moderation_review.router,
+    prefix="/api/review",
+    tags=["human-review"]
 )
 
 # Configure CORS

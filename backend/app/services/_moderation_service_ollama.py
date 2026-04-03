@@ -41,6 +41,27 @@ class ModerationService:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, func, *args)
 
+    # ── ADDED: Borderline detection for human review ──
+    def _is_borderline(self, decision_input: dict) -> tuple[bool, list]:
+        """Flag posts that are borderline for human review.
+        Triggers when: tech relevance is in review zone OR models disagree.
+        """
+        reasons = []
+        tech = decision_input.get('text_score', 0)
+        tox  = decision_input.get('toxicity_score', 0)
+        rule = decision_input.get('rule_score', 0)
+
+        # Condition 1: tech relevance in review zone
+        if 0.3 <= tech <= 0.5:
+            reasons.append(f"Tech relevance in review zone: {tech:.2f}")
+
+        # Condition 2: rule engine and toxicity model disagree
+        if rule < 0.4 and tox > 0.4:
+            reasons.append(f"Models disagree — rule_score={rule:.2f}, toxicity={tox:.2f}")
+
+        return len(reasons) > 0, reasons
+    # ── END ADDED ──
+
     async def moderate_post(
         self,
         post_id: str,
@@ -136,6 +157,23 @@ class ModerationService:
 
             print(f"🔥 Decision input: text_score={decision_input['text_score']:.3f}")
             sys.stdout.flush()
+
+            # ── ADDED: Borderline check — flag for human review before final decision ──
+            is_borderline, review_reasons = self._is_borderline(decision_input)
+            if is_borderline and not decision_input.get('is_harmful'):
+                logger.info(f"🔍 HUMAN REVIEW: Post {post_id} flagged as borderline — {review_reasons}")
+                post_repository.flag_for_human_review(
+                    post_id=post_id,
+                    reasons=review_reasons,
+                    scores={k: v for k, v in decision_input.items() if isinstance(v, float)}
+                )
+                return {
+                    "post_id": post_id,
+                    "allowed": True,
+                    "human_review": True,
+                    "review_reasons": review_reasons,
+                }
+            # ── END ADDED ──
 
             # Step 7: Decision
             decision = self.decision_engine.make_decision(decision_input)
