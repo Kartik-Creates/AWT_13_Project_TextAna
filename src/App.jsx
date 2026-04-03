@@ -4,6 +4,7 @@ import AnalyticsPage from "./pages/AnalyticsPage";
 import FeedPage from "./pages/FeedPage";
 import Loader from "./components/Loader";
 import MetricsDashboardPage from "./pages/MetricsDashboardPage";
+import HumanModerationPage from "./pages/HumanModerationPage";
 import usePosts from "./hooks/usePosts";
 import { Infinity } from "lucide-react";
 
@@ -76,6 +77,7 @@ function App() {
           >
             {activeTab === "analytics" && <AnalyticsPage />}
             {activeTab === "metrics" && <MetricsDashboardPage />}
+            {activeTab === "moderation" && <HumanModerationPage />}
             
             {activeTab === "feed" && (
               <FeedPage

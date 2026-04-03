@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Activity, LayoutDashboard, Infinity, Moon, Sun, MoreVertical } from "lucide-react";
+import { Activity, LayoutDashboard, Infinity, Moon, Sun, MoreVertical, ShieldAlert } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "../context/ThemeContext";
 
@@ -11,6 +11,7 @@ export default function KebabMenu({ activeTab, setActiveTab }) {
   const navItems = [
     { id: "analytics", label: "Analytics", icon: Activity },
     { id: "metrics", label: "Metrics", icon: LayoutDashboard },
+    { id: "moderation", label: "Moderation", icon: ShieldAlert },
     { id: "feed", label: "Feed", icon: LayoutDashboard },
   ];
 
