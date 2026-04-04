@@ -15,9 +15,9 @@ export default function Toast({ message, type, onClose }) {
   if (!message) return null;
 
   const styles = {
-    loading: "bg-blue-50 text-blue-700 border-blue-200",
-    success: "bg-green-50 text-green-700 border-green-200",
-    error: "bg-rose-50 text-rose-700 border-rose-200",
+    loading: "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800",
+    success: "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800",
+    error: "bg-rose-50 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800",
   };
 
   const icons = {

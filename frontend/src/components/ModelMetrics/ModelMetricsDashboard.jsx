@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
+import { motion } from "framer-motion";
 
-// Existing (updated) components - REMOVED ModelCard import
+// Existing components
 import ConfusionMatrix from "./ConfusionMatrix";
 import CategoryBarChart from "./CategoryBarChart";
 import RecentPredictionsTable from "./RecentPredictionsTable";
 import SystemHealthCard from "./SystemHealthCard";
 
-// New components
+// Utility components
 import DashboardFilters from "./DashboardFilters";
 import LatencyMetrics from "./LatencyMetrics";
 import ModerationOutcome from "./ModerationOutcome";
@@ -18,6 +19,12 @@ import ModelAgreement from "./ModelAgreement";
 import EdgeCaseDetector from "./EdgeCaseDetector";
 import TopTriggerKeywords from "./TopTriggerKeywords";
 import RecentCriticalFlags from "./RecentCriticalFlags";
+
+// ── New model-aware components ──
+import SemanticRelevanceGraph from "./SemanticRelevanceGraph";
+import ToxicityBreakdownChart from "./ToxicityBreakdownChart";
+import HateSpeechMetricsCard from "./HateSpeechMetricsCard";
+import ImageAnalysisMetrics from "./ImageAnalysisMetrics";
 
 import metricsService from "../../services/metricsService";
 
@@ -110,35 +117,44 @@ export default function ModelMetricsDashboard() {
     }
   };
 
+  const stagger = {
+    hidden: {},
+    visible: { transition: { staggerChildren: 0.08 } },
+  };
+  const fadeUp = {
+    hidden: { opacity: 0, y: 18 },
+    visible: { opacity: 1, y: 0, transition: { duration: 0.45, ease: "easeOut" } },
+  };
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-8">
+      {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
             Moderation Analytics
           </h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Real-time AI moderation insights — system health, model accuracy, and content risk analysis.
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Real-time AI moderation insights — semantic context, abuse detection, image safety, and system health.
           </p>
         </div>
         <div className="flex gap-2">
           <button
             onClick={() => handleExport("json")}
-            className="px-3 py-2 rounded-lg text-xs font-medium bg-gray-900 text-white shadow-sm hover:opacity-90"
+            className="px-3 py-2 rounded-lg text-xs font-medium bg-gray-900 dark:bg-white dark:text-gray-900 text-white shadow-sm hover:opacity-90 transition-opacity"
           >
             Export JSON
           </button>
           <button
             onClick={() => handleExport("csv")}
-            className="px-3 py-2 rounded-lg text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
+            className="px-3 py-2 rounded-lg text-xs font-medium border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors"
           >
             Export CSV
           </button>
         </div>
       </div>
 
-      {/* Filters */}
+      {/* ── Filters ── */}
       <DashboardFilters
         timeRange={timeRange}
         setTimeRange={setTimeRange}
@@ -153,51 +169,116 @@ export default function ModelMetricsDashboard() {
         </div>
       )}
 
-      {/* ═══════════════════════════════════════════════
-          Row 1: Key Outcome Metrics - FLEXIBLE AUTO-FIT LAYOUT
-          ═══════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        <ModerationOutcome data={advancedMetrics?.outcomes} />
-        <PredictionVolume data={advancedMetrics?.prediction_volume} />
-        <FalsePositiveIndicator data={advancedMetrics?.false_positives} />
-      </div>
+      {/* ════════════════════════════════════════════════════════
+          PHASE 0: Key Outcome KPIs
+          ════════════════════════════════════════════════════════ */}
+      <motion.div
+        variants={stagger} initial="hidden" animate="visible"
+        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
+      >
+        <motion.div variants={fadeUp}><ModerationOutcome data={advancedMetrics?.outcomes} /></motion.div>
+        <motion.div variants={fadeUp}><PredictionVolume data={advancedMetrics?.prediction_volume} /></motion.div>
+        <motion.div variants={fadeUp}><FalsePositiveIndicator data={advancedMetrics?.false_positives} /></motion.div>
+      </motion.div>
 
-      {/* ═══════════════════════════════════════════════
-          Row 2: Performance & Latency - FLEXIBLE AUTO-FIT LAYOUT
-          ═══════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        <LatencyMetrics data={advancedMetrics?.latency} />
-        <PipelineLatency data={advancedMetrics?.pipeline_latency} />
-        <ConfidenceDistribution data={advancedMetrics?.confidence_distribution} />
-      </div>
-
-      {/* ═══════════════════════════════════════════════
-          Row 3: Confusion Matrix + Model Agreement - UPDATED LAYOUT
-          REMOVED: Text Toxicity, NSFW Detection, Image-Text Relevance cards
-          ═══════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Confusion Matrix - now takes full column */}
-        <ConfusionMatrix
-          matrix={{ tn: 8452, fp: 312, fn: 287, tp: 4291 }}
-        />
-        {/* Model Agreement - side by side with Confusion Matrix */}
-        <ModelAgreement data={advancedMetrics?.model_agreement} />
-      </div>
-
-      {/* ═══════════════════════════════════════════════
-          Row 4: Detection & Patterns - FLEXIBLE AUTO-FIT LAYOUT
-          ═══════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        <TopTriggerKeywords data={advancedMetrics?.top_keywords} />
-        <EdgeCaseDetector data={advancedMetrics?.edge_cases} />
-        <div className="space-y-4">
-          <CategoryBarChart data={categoryBreakdown} />
-          <SystemHealthCard health={systemHealth} />
+      {/* ════════════════════════════════════════════════════════
+          PHASE 1 : Semantic Context & Visual Models
+          ════════════════════════════════════════════════════════ */}
+      <div>
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-[10px] uppercase tracking-widest font-bold text-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 px-2.5 py-1 rounded-full">Phase 1</span>
+          <h2 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Semantic Context &amp; Visual Intelligence</h2>
         </div>
+        <motion.div
+          variants={stagger} initial="hidden" animate="visible"
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
+        >
+          <motion.div variants={fadeUp} className="lg:col-span-1">
+            <SemanticRelevanceGraph data={advancedMetrics?.tech_relevance} />
+          </motion.div>
+          <motion.div variants={fadeUp} className="lg:col-span-2">
+            <ImageAnalysisMetrics data={advancedMetrics?.outcomes} />
+          </motion.div>
+        </motion.div>
       </div>
-      {/* ═══════════════════════════════════════════════
-          Row 5: Critical Flags + Recent Predictions
-          ═══════════════════════════════════════════════ */}
+
+      {/* ════════════════════════════════════════════════════════
+          PHASE 2 : Abuse & Harm Detection Models
+          ════════════════════════════════════════════════════════ */}
+      <div>
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-[10px] uppercase tracking-widest font-bold text-rose-500 bg-rose-50 dark:bg-rose-900/30 px-2.5 py-1 rounded-full">Phase 2</span>
+          <h2 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Abuse &amp; Harm Detection</h2>
+        </div>
+        <motion.div
+          variants={stagger} initial="hidden" animate="visible"
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
+        >
+          <motion.div variants={fadeUp} className="lg:col-span-1">
+            <ToxicityBreakdownChart data={advancedMetrics?.outcomes?.top_reasons} />
+          </motion.div>
+          <motion.div variants={fadeUp} className="lg:col-span-1">
+            <HateSpeechMetricsCard data={advancedMetrics?.outcomes} />
+          </motion.div>
+          <motion.div variants={fadeUp} className="lg:col-span-1">
+            <ConfidenceDistribution data={advancedMetrics?.confidence_distribution} />
+          </motion.div>
+        </motion.div>
+      </div>
+
+      {/* ════════════════════════════════════════════════════════
+          PHASE 3 : System Accuracy & Pipeline Health
+          ════════════════════════════════════════════════════════ */}
+      <div>
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-[10px] uppercase tracking-widest font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 px-2.5 py-1 rounded-full">Phase 3</span>
+          <h2 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">System Accuracy &amp; Pipeline Health</h2>
+        </div>
+        <motion.div
+          variants={stagger} initial="hidden" animate="visible"
+          className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5"
+        >
+          <motion.div variants={fadeUp}>
+            <ConfusionMatrix matrix={{ tn: 8452, fp: 312, fn: 287, tp: 4291 }} />
+          </motion.div>
+          <motion.div variants={fadeUp}>
+            <ModelAgreement data={advancedMetrics?.model_agreement} />
+          </motion.div>
+        </motion.div>
+
+        <motion.div
+          variants={stagger} initial="hidden" animate="visible"
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
+        >
+          <motion.div variants={fadeUp}><LatencyMetrics data={advancedMetrics?.latency} /></motion.div>
+          <motion.div variants={fadeUp}><PipelineLatency data={advancedMetrics?.pipeline_latency} /></motion.div>
+          <motion.div variants={fadeUp} className="space-y-5">
+            <CategoryBarChart data={categoryBreakdown} />
+            <SystemHealthCard health={systemHealth} />
+          </motion.div>
+        </motion.div>
+      </div>
+
+      {/* ════════════════════════════════════════════════════════
+          PHASE 4 : Detection Signals & Edge Cases
+          ════════════════════════════════════════════════════════ */}
+      <div>
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-[10px] uppercase tracking-widest font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 px-2.5 py-1 rounded-full">Phase 4</span>
+          <h2 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Detection Signals &amp; Edge Cases</h2>
+        </div>
+        <motion.div
+          variants={stagger} initial="hidden" animate="visible"
+          className="grid grid-cols-1 md:grid-cols-2 gap-5"
+        >
+          <motion.div variants={fadeUp}><TopTriggerKeywords data={advancedMetrics?.top_keywords} /></motion.div>
+          <motion.div variants={fadeUp}><EdgeCaseDetector data={advancedMetrics?.edge_cases} /></motion.div>
+        </motion.div>
+      </div>
+
+      {/* ════════════════════════════════════════════════════════
+          Critical Flags & Recent Predictions
+          ════════════════════════════════════════════════════════ */}
       <RecentCriticalFlags data={advancedMetrics?.recent_critical} />
       <RecentPredictionsTable items={filteredPredictions} />
     </div>
