@@ -269,9 +269,9 @@ class SemanticAnalyzer:
             "primary_category": "tech" if tech["zone"] == "tech" else "non_tech",
             "tech_zone": tech["zone"],
             "processing_time_ms": int((time.time() - start_time) * 1000),
-            "method": "semantic",
-            "source": "semantic",
-            "has_tech_context": tech.get("has_tech_context", False)
+            "method": "semantic",   
+            "has_tech_context": tech.get("has_tech_context", False),
+            "source": "semantic"
         }
         
         return result
