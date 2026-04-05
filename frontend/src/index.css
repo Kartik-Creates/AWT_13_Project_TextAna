@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* ── Dark Mode: class-based via .dark on <html> ── */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-loops-bg: #fdfbf7;
   --color-loops-card: rgba(255, 255, 255, 0.7);
@@ -12,19 +15,41 @@
   --color-loops-text-muted: #64748b;
 }
 
+/* ── Theme CSS Variables ── */
 :root {
   font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
+  color-scheme: light;
   color: var(--color-loops-text);
   background-color: var(--color-loops-bg);
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Light theme tokens */
+  --theme-body-bg: linear-gradient(135deg, #f0f4ff 0%, #f5efff 50%, #fff7fc 100%);
+  --theme-sidebar-bg: #ffffff;
+  --theme-sidebar-border: #e2e8f0;
+  --theme-glass: rgba(255, 255, 255, 0.95);
+  --theme-glass-border: rgba(255, 255, 255, 0.7);
+  --theme-divider: #e2e8f0;
+  --theme-scrollbar: #cbd5e1;
+  --theme-scrollbar-hover: #94a3b8;
+}
+
+/* Dark theme token overrides */
+.dark {
+  color-scheme: dark;
+  --theme-body-bg: linear-gradient(135deg, #020617 0%, #0f172a 50%, #1e1b4b 100%);
+  --theme-sidebar-bg: #0f172a;
+  --theme-sidebar-border: rgba(255, 255, 255, 0.07);
+  --theme-glass: rgba(30, 41, 59, 0.85);
+  --theme-glass-border: rgba(255, 255, 255, 0.1);
+  --theme-divider: rgba(255, 255, 255, 0.07);
+  --theme-scrollbar: #334155;
+  --theme-scrollbar-hover: #475569;
 }
 
 body {
@@ -32,36 +57,107 @@ body {
   display: flex;
   min-height: 100vh;
   box-sizing: border-box;
-  background: linear-gradient(135deg, #fbf7f0 0%, #f0ead6 100%);
+  background: var(--theme-body-bg);
   background-attachment: fixed;
+  transition: background 0.3s ease;
 }
 
 #root {
   width: 100%;
 }
 
+/* ── Smooth Theme Transitions (exclude animations) ── */
+*:not(.animate-spin):not(.animate-pulse) {
+  transition-property: background-color, border-color, color, box-shadow;
+  transition-duration: 0.3s;
+  transition-timing-function: ease;
+}
+
+/* ── Glass Panel ── */
 .glass-panel {
-  background: var(--color-loops-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--color-loops-border);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  background: var(--theme-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--theme-glass-border);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
 }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
+/* ── Custom Scrollbar ── */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--theme-scrollbar); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--theme-scrollbar-hover); }
+
+/* ══════════════════════════════════════════════
+   DARK MODE — Global CSS overrides for
+   ModelMetrics components (not individually updated)
+   ══════════════════════════════════════════════ */
+
+/* Backgrounds */
+.dark .bg-white { background-color: #1e1e32 !important; }
+.dark .bg-gray-50 { background-color: #1a1a2e !important; }
+.dark .bg-gray-100 { background-color: rgba(255,255,255,0.06) !important; }
+.dark .bg-gray-200 { background-color: rgba(255,255,255,0.09) !important; }
+.dark .bg-white\/90 { background-color: rgba(21,21,42,0.9) !important; }
+.dark .bg-white\/80 { background-color: rgba(21,21,42,0.85) !important; }
+.dark .bg-white\/70 { background-color: rgba(21,21,42,0.8) !important; }
+.dark .bg-white\/60 { background-color: rgba(21,21,42,0.75) !important; }
+.dark .bg-white\/50 { background-color: rgba(21,21,42,0.65) !important; }
+.dark .bg-white\/40 { background-color: rgba(21,21,42,0.55) !important; }
+.dark .bg-white\/30 { background-color: rgba(21,21,42,0.45) !important; }
+
+/* Text */
+.dark .text-gray-900, .dark .text-slate-900 { color: #f1f5f9 !important; }
+.dark .text-gray-800 { color: #e2e8f0 !important; }
+.dark .text-gray-700, .dark .text-slate-700 { color: #cbd5e1 !important; }
+.dark .text-gray-600, .dark .text-slate-600 { color: #94a3b8 !important; }
+.dark .text-gray-500, .dark .text-slate-500 { color: #64748b !important; }
+.dark .text-gray-400, .dark .text-slate-400 { color: #4e6070 !important; }
+
+/* Borders */
+.dark .border-gray-100, .dark .border-slate-100 { border-color: rgba(255,255,255,0.07) !important; }
+.dark .border-gray-200, .dark .border-slate-200 { border-color: rgba(255,255,255,0.09) !important; }
+.dark .border-gray-300, .dark .border-slate-300 { border-color: rgba(255,255,255,0.12) !important; }
+
+/* Accent backgrounds */
+.dark .bg-indigo-50 { background-color: rgba(99,102,241,0.12) !important; }
+.dark .border-indigo-100 { border-color: rgba(99,102,241,0.2) !important; }
+.dark .bg-emerald-50 { background-color: rgba(16,185,129,0.1) !important; }
+.dark .border-emerald-100 { border-color: rgba(16,185,129,0.2) !important; }
+.dark .bg-rose-50 { background-color: rgba(244,63,63,0.1) !important; }
+.dark .border-rose-100, .dark .border-rose-200 { border-color: rgba(244,63,63,0.2) !important; }
+.dark .bg-amber-50 { background-color: rgba(245,158,11,0.1) !important; }
+.dark .border-amber-100, .dark .border-amber-200 { border-color: rgba(245,158,11,0.2) !important; }
+.dark .bg-blue-50 { background-color: rgba(59,130,246,0.1) !important; }
+.dark .border-blue-200 { border-color: rgba(59,130,246,0.2) !important; }
+.dark .bg-green-50 { background-color: rgba(16,185,129,0.1) !important; }
+.dark .border-green-200 { border-color: rgba(16,185,129,0.2) !important; }
+
+/* Export buttons in MetricsDashboard */
+.dark .bg-gray-900 { background-color: #f1f5f9 !important; color: #0f172a !important; }
+
+/* Recharts in dark mode */
+.dark .recharts-text tspan { fill: #475569 !important; }
+.dark .recharts-cartesian-grid line { stroke: rgba(255,255,255,0.05) !important; }
+.dark .recharts-legend-item-text { color: #64748b !important; }
+
+/* Input/Textarea */
+.dark textarea, .dark input:not([type="file"]) { color: #e2e8f0; }
+.dark textarea::placeholder, .dark input::placeholder { color: #475569; }
+
+/* ── Scrollbar hide ── */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── Wiggle / shake keyframe (reject hover) ── */
+@keyframes wiggle {
+  0%, 100% { transform: translateX(0); }
+  25%       { transform: translateX(-3px); }
+  75%       { transform: translateX(3px); }
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
-}
+/* ── Custom scroll for internal panels ── */
+.custom-scroll::-webkit-scrollbar { width: 4px; }
+.custom-scroll::-webkit-scrollbar-track { background: transparent; }
+.custom-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
