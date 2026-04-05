@@ -61,13 +61,13 @@ export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore
   return (
     <div className="max-w-2xl mx-auto w-full pb-20">
       {/* Sticky Header */}
-      <div className="sticky top-0 z-10 glass-panel border-b border-gray-200/50 px-4 py-3 pb-4 rounded-b-2xl mb-4">
-        <h2 className="text-xl font-bold text-gray-900 tracking-tight">Home</h2>
+      <div className="sticky top-0 z-10 glass-panel border-b border-gray-200/50 dark:border-white/10 px-4 py-2 pb-3 rounded-b-2xl mb-3 shadow-sm">
+        <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100 tracking-tight">Home</h2>
       </div>
 
       <CreatePost onSubmit={handleSubmit} isSubmitting={isSubmitting} />
 
-      <div className="h-px bg-gray-200 my-4 w-full" />
+      <div className="h-px bg-gray-200 dark:bg-gray-800 my-4 w-full" />
 
       <div className="space-y-1">
         {isLoading ? (
@@ -75,7 +75,7 @@ export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore
             <div className="w-8 h-8 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin" />
           </div>
         ) : posts.length === 0 ? (
-          <div className="text-center py-12 text-gray-400">
+          <div className="text-center py-12 text-gray-400 dark:text-gray-500">
             <p className="text-lg font-medium">No posts yet</p>
             <p className="text-sm">Be the first to create a post!</p>
           </div>
@@ -96,7 +96,7 @@ export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore
 
         {/* End of feed */}
         {!isLoading && !hasMore && posts.length > 0 && (
-          <div className="text-center py-6 text-gray-400 text-sm">
+          <div className="text-center py-6 text-gray-400 dark:text-gray-500 text-sm">
             You've reached the end of the feed
           </div>
         )}
@@ -112,3 +112,4 @@ export default function Feed({ posts, setPosts, isLoading, loadMore, loadingMore
     </div>
   );
 }
+/**This file is the main feed page of the frontend application. It displays a list of posts and includes a form for creating new posts. The page also implements infinite scrolling to load more posts as the user scrolls down. Additionally, it provides real-time feedback on post submissions using a toast notification system.**/

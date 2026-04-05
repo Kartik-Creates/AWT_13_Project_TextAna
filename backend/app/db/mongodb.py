@@ -151,6 +151,16 @@ class PostRepository:
             "rejected": rejected,
             "pending": pending
         }
+    def flag_for_human_review(self, post_id: str, reasons: list, scores: dict):
+        self.posts.update_one(
+            {"_id": post_id},
+            {"$set": {
+                "moderation_status": "human_review",
+                "review_reasons": reasons,
+                "borderline_scores": scores,
+                "flagged_at": datetime.utcnow()
+            }}
+        )
 
 # Create singleton instances
 mongodb = MongoDB()

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Logs
 logs
 *.log
@@ -37,3 +38,38 @@ dist-ssr
 
 # Testing
 coverage/
+=======
+# Python libraries and venv
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+*.env
+
+# Large ML models and checkpoints
+*.pth
+*.pt
+*.bin
+*.onnx
+*.safetensors
+models/
+
+# Logs and transient data
+*.log
+uploads/
+dist/
+build/
+
+# IDE files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+>>>>>>> e58fdb611b637d48a8a66336b7db4d5fc72f2f54

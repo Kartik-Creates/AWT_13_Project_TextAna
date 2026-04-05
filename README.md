@@ -24,7 +24,8 @@ A modern, full-stack **AI Text and Image Content Moderation Dashboard** built wi
 **Backend & AI Engine:**
 *   **Framework:** FastAPI (Python)
 *   **Database:** MongoDB, PyMongo
-*   **Machine Learning:** PyTorch, HuggingFace Transformers, CLIP (for text & vision parsing)
+*   **Machine Learning:** PyTorch, HuggingFace Transformers, CLIP, **Sentence Transformers**
+*   **Detailed ML Docs:** [View Project ML Documentation](file:///c:/Users/HP/Desktop/AWT_13_Project_TextAna/docs/PROJECT_ML_DOCUMENTATION.md)
 
 ---
 
